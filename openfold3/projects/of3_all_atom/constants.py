@@ -50,6 +50,8 @@ PROTEIN_METRICS = [
     "drmsd_intra_protein",
     "clash_intra_protein",
     "clash_inter_protein_protein",
+    "dockq_protein_protein",
+    "dockq_weighted_avg",
 ]
 
 LIGAND_METRICS = [
@@ -75,6 +77,7 @@ DNA_METRICS = [
     "clash_intra_dna",
     "clash_inter_dna_dna",
     "clash_inter_protein_dna",
+    "dockq_protein_dna",
 ]
 
 RNA_METRICS = [
@@ -88,6 +91,7 @@ RNA_METRICS = [
     "clash_intra_rna",
     "clash_inter_rna_rna",
     "clash_inter_protein_rna",
+    "dockq_protein_rna",
 ]
 
 METRICS = [
@@ -154,6 +158,7 @@ METRICS_MAXIMIZE = [
     "lddt",
     "plddt",
     "rasa",
+    "dockq",
 ]
 
 METRICS_MINIMIZE = [

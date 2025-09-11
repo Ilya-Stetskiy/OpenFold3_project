@@ -1,4 +1,5 @@
 from collections.abc import Sequence
+from itertools import combinations
 from typing import Optional
 
 import torch
@@ -7,7 +8,7 @@ from openfold3.core.metrics.confidence import compute_plddt
 from openfold3.core.metrics.rasa import compute_rasa_batch
 from openfold3.core.metrics.validation import gdt_ha, gdt_ts, rmsd
 from openfold3.core.utils.atomize_utils import broadcast_token_feat_to_atoms
-from openfold3.core.utils.geometry.kabsch_alignment import kabsch_align
+from openfold3.core.utils.geometry.kabsch_alignment import apply_transformation, get_optimal_transformation, kabsch_align
 from openfold3.core.utils.tensor_utils import tensor_tree_map
 
 
@@ -249,6 +250,270 @@ def drmsd(
         inter_drmsd = torch.sqrt(inter_drmsd)
 
     return intra_drmsd, inter_drmsd
+
+
+def dockq(
+    pred_coords: torch.Tensor,
+    gt_coords: torch.Tensor,
+    all_atom_mask: torch.Tensor,
+    asym_id_atomized: torch.Tensor,
+    inter_mask_filter: torch.Tensor,
+    is_protein_atomized: torch.Tensor,
+    is_rna_atomized: torch.Tensor,
+    is_dna_atomized: torch.Tensor,
+    interface_cutoff1: float = 5.0,
+    interface_cutoff2: float = 10.0,
+    d1: float = 8.5,
+    d2: float = 1.5,
+    eps: float = 1e-10,
+) -> dict[str, torch.Tensor]:
+    """
+    Computes dockq scores for all interfaces in a multimeric complex
+
+    Args:
+        pred_coords: predicted coordinates [*, n_atom, 3]
+        gt_coords: gt coordinates [*, n_atom, 3]
+        all_atom_mask: atom mask [*, n_atom]
+        asym_id_atomized: atomized asym_id feature [*, n_atom]
+        inter_mask_filter: [*, n_atom, n_atom] pairwise interaction filter
+        is_protein_atomized: broadcasted is_protein feature [*, n_atom]
+        is_rna_atomized: broadcasted is_rna feature [*, n_atom]
+        is_dna_atomized: broadcasted is_dna feature [*, n_atom]
+        interface_cutoff1: interface distance cutoff for dockq computation
+        interface_cutoff2: interface distance cutoff for irmsd computation
+        d1: parameter d1 in dockq computation
+        d2: parameter d2 in dockq computation
+
+    Returns:
+        out: dictionary containing dockq scores
+            'dockq_protein_protein': protein-protein dockq score
+            'dockq_protein_rna': protein-rna dockq score
+            'dockq_protein_dna': protein-dna dockq score
+            'dockq_weighted_avg': weighted average dockq score based on contact numbers across all interfaces
+
+    Note:
+        returns None for scores if no valid interface found
+    """
+    out = {} 
+    unique_chains = torch.unique(asym_id_atomized[all_atom_mask.bool()])
+    protein_chains = []
+    rna_chains = []
+    dna_chains = []
+
+    for chain_id in unique_chains:
+        chain_mask = (asym_id_atomized == chain_id) & all_atom_mask.bool()
+        if (is_protein_atomized & chain_mask).any():
+            protein_chains.append(chain_id)
+        elif (is_rna_atomized & chain_mask).any():
+            rna_chains.append(chain_id)
+        elif (is_dna_atomized & chain_mask).any():
+            dna_chains.append(chain_id)
+
+    interface_results = {
+        'protein_protein': [],
+        'protein_rna': [],
+        'protein_dna': []
+    }
+    
+    # Store contact counts for weighted averaging
+    contact_counts = {
+        'protein_protein': [],
+        'protein_rna': [],
+        'protein_dna': []
+    }
+
+    def process_interface(c1, c2, interface_type):
+        """Process a single interface between two chains.
+        """
+        bs = asym_id_atomized.shape[:-1]
+        device = asym_id_atomized.device
+        dtype = gt_coords.dtype
+        
+        # create masks for each chain - keep batch dims
+        c1_mask = (asym_id_atomized == c1).bool() & all_atom_mask.bool()
+        c2_mask = (asym_id_atomized == c2).bool() & all_atom_mask.bool()
+        N1 = c1_mask.sum(dim=-1, keepdim=True)
+        N2 = c2_mask.sum(dim=-1, keepdim=True)
+
+        if (N1 == 0).any() or (N2 == 0).any():
+            return None, 0
+        # symmetric multimer chain assignment leading to an unexpected case
+        if N1.numel() > 1 and torch.unique(N1).numel() > 1 or N2.numel() > 1 and torch.unique(N2).numel() > 1:
+            return None, 0 
+        
+        N1_val = N1[0, 0].item()
+        N2_val = N2[0, 0].item()
+        
+        # Try to extract coordinates - if it fails, return None
+        # homo-multimers can cause some unexpected errors
+        try:
+            x1_gt = gt_coords[c1_mask.bool()].view(bs + (N1_val, 3))
+            x2_gt = gt_coords[c2_mask.bool()].view(bs + (N2_val, 3))
+            x1_pred = pred_coords[c1_mask.bool()].view(bs + (N1_val, 3))
+            x2_pred = pred_coords[c2_mask.bool()].view(bs + (N2_val, 3))
+        except RuntimeError as e:
+            print(f"Warning: Failed to extract coordinates for chains {c1}, {c2}: {e}")
+            return None, 0
+        
+        c1_indices = torch.where(c1_mask[0, 0])[0]
+        c2_indices = torch.where(c2_mask[0, 0])[0]
+        inter_filter = inter_mask_filter[:, :, c1_indices][:, :, :, c2_indices]
+        
+        d_gt = torch.sqrt(eps + torch.sum((x1_gt.unsqueeze(-2) - x2_gt.unsqueeze(-3)) ** 2, dim=-1))
+        
+        valid_pairs = inter_filter.bool()
+        interface_mask = (d_gt < interface_cutoff1) & valid_pairs
+        interface_mask_10 = (d_gt < interface_cutoff2) & valid_pairs
+        
+        contacts_gt = interface_mask.sum(dim=(-2, -1))
+        if (contacts_gt == 0).any():
+            return None, contacts_gt[0, 0].item() 
+        
+        # FNAT: Fraction of native contacts
+        d_pred = torch.sqrt(eps + torch.sum((x1_pred.unsqueeze(-2) - x2_pred.unsqueeze(-3)) ** 2, dim=-1))
+        contacts_pred = ((d_pred < interface_cutoff1) & valid_pairs).sum(dim=(-2, -1))
+        fnat = contacts_pred.float() / (contacts_gt.float() + eps)
+        
+        # LRMS calculation with error handling
+        try:
+            if N1_val >= N2_val:
+                # align using chain 1 (receptor)
+                x1_gt_for_align = x1_gt.view(-1, N1_val, 3)
+                x1_pred_for_align = x1_pred.view(-1, N1_val, 3)
+                x2_gt_for_align = x2_gt.view(-1, N2_val, 3)
+                x2_pred_for_align = x2_pred.view(-1, N2_val, 3)
+                
+                transformation = get_optimal_transformation(
+                    mobile_positions=x1_pred_for_align,
+                    target_positions=x1_gt_for_align,
+                    positions_mask=torch.ones(x1_gt_for_align.shape[0], N1_val, device=device)
+                )
+                x2_pred_aligned = apply_transformation(x2_pred_for_align, transformation)
+                dx = torch.sqrt(torch.mean((x2_gt_for_align - x2_pred_aligned) ** 2, dim=(-2, -1)))
+            else:
+                x1_gt_for_align = x1_gt.view(-1, N1_val, 3)
+                x1_pred_for_align = x1_pred.view(-1, N1_val, 3)
+                x2_gt_for_align = x2_gt.view(-1, N2_val, 3)
+                x2_pred_for_align = x2_pred.view(-1, N2_val, 3)
+                
+                transformation = get_optimal_transformation(
+                    mobile_positions=x2_pred_for_align,
+                    target_positions=x2_gt_for_align,
+                    positions_mask=torch.ones(x2_gt_for_align.shape[0], N2_val, device=device)
+                )
+                
+                x1_pred_aligned = apply_transformation(x1_pred_for_align, transformation)
+                
+                dx = torch.sqrt(torch.mean((x1_gt_for_align - x1_pred_aligned) ** 2, dim=(-2, -1)))
+            
+            lrms = 1.0 / (1.0 + (dx / d1) ** 2)
+            lrms = lrms.view(bs)
+        except RuntimeError as e:
+            print(f"Warning: Failed LRMS calculation for chains {c1}, {c2}: {e}")
+            return None, 0
+        
+        # IRMS: Interface RMSD with error handling
+        try:
+            mask1 = interface_mask_10.any(dim=-1, keepdim=False)
+            mask2 = interface_mask_10.any(dim=-2, keepdim=False)
+            
+            n_interface1 = mask1.sum(dim=-1)
+            n_interface2 = mask2.sum(dim=-1)
+            
+            if (n_interface1 > 0).any() and (n_interface2 > 0).any():
+                n_int1 = n_interface1[0, 0].item()
+                n_int2 = n_interface2[0, 0].item()
+                
+                mask1_indices = torch.where(mask1[0, 0])[0]
+                mask2_indices = torch.where(mask2[0, 0])[0]
+                
+                # Extract interface coordinates using gather
+                x1_gt_int = x1_gt[:, :, mask1_indices, :]
+                x2_gt_int = x2_gt[:, :, mask2_indices, :]
+                x1_pred_int = x1_pred[:, :, mask1_indices, :]
+                x2_pred_int = x2_pred[:, :, mask2_indices, :]
+                
+                x_pocket_gt = torch.cat([x1_gt_int, x2_gt_int], dim=-2) 
+                x_pocket_pred = torch.cat([x1_pred_int, x2_pred_int], dim=-2)
+                n_pocket = n_int1 + n_int2
+                x_pocket_gt_align = x_pocket_gt.view(-1, n_pocket, 3)
+                x_pocket_pred_align = x_pocket_pred.view(-1, n_pocket, 3)
+                
+                pocket_mask = torch.ones(x_pocket_gt_align.shape[0], n_pocket, device=device)
+                
+                x_pocket_aligned = kabsch_align(
+                    mobile_positions=x_pocket_pred_align,
+                    target_positions=x_pocket_gt_align,
+                    positions_mask=pocket_mask
+                )
+                
+                dx = torch.sqrt(torch.mean((x_pocket_gt_align - x_pocket_aligned) ** 2, dim=(-2, -1)))
+                irms = 1.0 / (1.0 + (dx / d2) ** 2)
+                irms = irms.view(bs)
+            else:
+                irms = torch.zeros(bs, device=device, dtype=dtype)
+        except (RuntimeError, IndexError) as e:
+            return None, 0
+        
+        dockq = (fnat + lrms + irms) / 3.0
+        return dockq, contacts_gt[0, 0].item()
+    
+    for c1, c2 in combinations(protein_chains, 2):
+        dockq_score, contacts = process_interface(c1, c2, 'protein_protein')
+        if dockq_score is not None:
+            interface_results['protein_protein'].append(dockq_score)
+            contact_counts['protein_protein'].append(contacts)
+    
+    for c_prot in protein_chains:
+        for c_rna in rna_chains:
+            dockq_score, contacts = process_interface(c_prot, c_rna, 'protein_rna')
+            if dockq_score is not None:
+                interface_results['protein_rna'].append(dockq_score)
+                contact_counts['protein_rna'].append(contacts)
+    
+    for c_prot in protein_chains:
+        for c_dna in dna_chains:
+            dockq_score, contacts = process_interface(c_prot, c_dna, 'protein_dna')
+            if dockq_score is not None:
+                interface_results['protein_dna'].append(dockq_score)
+                contact_counts['protein_dna'].append(contacts)
+    
+    has_valid_interfaces = any(len(results) > 0 for results in interface_results.values())
+    
+    if not has_valid_interfaces:
+        return {
+            'dockq_protein_protein': None,
+            'dockq_protein_rna': None, 
+            'dockq_protein_dna': None,
+            'dockq_weighted_avg': None
+        }
+    
+    for interface_type, results in interface_results.items():
+        if results:
+            metric_name = f'dockq_{interface_type}'
+            stacked = torch.stack(results, dim=0)
+            out[metric_name] = stacked.mean(dim=0)
+        else:
+            out[f'dockq_{interface_type}'] = None
+    
+    all_dockq = []
+    all_weights = []
+    
+    for interface_type in ['protein_protein', 'protein_rna', 'protein_dna']:
+        if interface_results[interface_type]:
+            for dockq_score, weight in zip(interface_results[interface_type], contact_counts[interface_type]):
+                all_dockq.append(dockq_score)
+                all_weights.append(weight)
+    
+    if all_dockq:
+        weights = torch.tensor(all_weights, dtype=torch.float32, device=pred_coords.device)
+        weights = weights / weights.sum()
+        dockq_stack = torch.stack(all_dockq, dim=-1) 
+        out['dockq_weighted_avg'] = (dockq_stack * weights).sum(dim=-1)
+    else:
+        out['dockq_weighted_avg'] = None
+        
+    return out
 
 
 def get_protein_metrics(
@@ -1303,6 +1568,19 @@ def get_metrics(
             all_atom_mask=all_atom_mask,
         )
         metrics = metrics | protein_validation_metrics
+
+    if torch.any(is_protein_atomized):
+        dockq_metrics = dockq(
+            pred_coords=pred_coords,
+            gt_coords=gt_coords,
+            all_atom_mask=all_atom_mask,
+            asym_id_atomized=asym_id_atomized,
+            inter_mask_filter=inter_filter_atomized,
+            is_protein_atomized=is_protein_atomized,
+            is_rna_atomized=is_rna_atomized,
+            is_dna_atomized=is_dna_atomized,
+        )
+        metrics = metrics | dockq_metrics
 
     if torch.any(is_ligand_atomized):
         ligand_validation_metrics = get_ligand_metrics(
