@@ -483,6 +483,7 @@ model_config = mlc.ConfigDict(
                     "ligand_weight": 10.0,
                     "eps": eps,
                     "chunk_size": None,
+                    "use_sparse_loss": False,
                 },
                 "distogram": {
                     "no_bins": 64,
