@@ -268,24 +268,9 @@ class ExperimentRunner(ABC):
     @cached_property
     def trainer(self) -> pl.Trainer:
         """Create and return the trainer instance."""
-        exclude_args = {"deepspeed_config_path", "distributed_timeout", "mpi_plugin"}
-
-        # The training step with per-sample gradient clipping handles this internally
-        # PL does not support manual optimization with accumulate_grad_batches
-        if self.model_config.settings.gradient_clipping.per_sample_clipping:
-            exclude_args.add("accumulate_grad_batches")
-            accumulate_grad_batches = self.pl_trainer_args.accumulate_grad_batches
-            self.model_config.update(
-                {
-                    "settings": {
-                        "manual_optimization": {
-                            "accumulate_grad_batches": accumulate_grad_batches
-                        }
-                    }
-                }
-            )
-
-        trainer_args = self.pl_trainer_args.model_dump(exclude=exclude_args)
+        trainer_args = self.pl_trainer_args.model_dump(
+            exclude={"deepspeed_config_path", "distributed_timeout", "mpi_plugin"}
+        )
         trainer_args.update(
             {
                 "default_root_dir": self.output_dir,
@@ -294,17 +279,6 @@ class ExperimentRunner(ABC):
                 "logger": self.loggers,
             }
         )
-
-        if not self.model_config.settings.gradient_clipping.per_sample_clipping:
-            clip_val = self.model_config.settings.gradient_clipping.clip_val
-            trainer_args.update(
-                {
-                    # If DeepSpeed is enabled, these values will be passed to the
-                    # DS config
-                    "gradient_clip_val": clip_val,
-                    "gradient_clip_algorithm": "norm",
-                }
-            )
 
         return pl.Trainer(**trainer_args)
 
@@ -364,6 +338,8 @@ class TrainingExperimentRunner(ExperimentRunner):
         self.logging_config = experiment_config.logging_config
         self.checkpoint_config = experiment_config.checkpoint_config
 
+        self.update_trainer_config()
+
     def setup(self) -> None:
         """Set up the experiment environment.
 
@@ -378,6 +354,46 @@ class TrainingExperimentRunner(ExperimentRunner):
 
         if self.do_manual_ckpt_loading:
             self.manual_load_checkpoint()
+
+    def update_trainer_config(self):
+        """
+        Update trainer configuration based on model settings.
+        This handles gradient clipping and accumulation settings.
+        """
+        if self.model_config.settings.gradient_clipping.per_sample_clipping:
+            # The training step with per-sample gradient clipping handles this
+            # internally PL does not support manual optimization with
+            # accumulate_grad_batches
+            if self.pl_trainer_args.accumulate_grad_batches > 1:
+                # If set in trainer args, move to model config and set to 1 in trainer
+                pl_accum_grad_batches = self.pl_trainer_args.accumulate_grad_batches
+                self.model_config.update(
+                    {
+                        "settings": {
+                            "manual_optimization": {
+                                "accumulate_grad_batches": pl_accum_grad_batches
+                            }
+                        }
+                    }
+                )
+                self.pl_trainer_args.accumulate_grad_batches = 1
+
+            # Update the epoch length to account for gradient accumulation
+            accum_grad_batches = (
+                self.model_config.settings.manual_optimization.accumulate_grad_batches
+            )
+            self.data_module_config.epoch_len = (
+                accum_grad_batches * self.data_module_config.epoch_len
+            )
+
+        else:
+            # If not doing per-sample grad clipping, set the clipping value in
+            # the trainer args to be handled by PL
+            clip_val = self.model_config.settings.gradient_clipping.clip_val
+
+            # If DeepSpeed is enabled, these values will be passed to the DS config
+            self.pl_trainer_args.gradient_clip_val = clip_val
+            self.pl_trainer_args.gradient_clip_algorithm = "norm"
 
     @cached_property
     def data_module_config(self) -> DataModuleConfig:

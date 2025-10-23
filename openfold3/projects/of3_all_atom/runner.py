@@ -80,7 +80,7 @@ class OpenFold3AllAtom(ModelRunner):
             model_config.settings.gradient_clipping.per_sample_clipping
         )
         self.grad_manager = None
-        if self.per_sample_clipping:
+        if self.per_sample_grad_clipping:
             self.grad_manager = PerSampleGradManager(
                 gradient_clip_val=model_config.settings.gradient_clipping.clip_val,
                 accumulate_grad_batches=model_config.settings.manual_optimization.accumulate_grad_batches,
@@ -339,6 +339,9 @@ class OpenFold3AllAtom(ModelRunner):
         if self.ema.device != example_feat.device:
             self.ema.to(example_feat.device)
 
+        if self.grad_manager.device != example_feat.device:
+            self.grad_manager.to(example_feat.device)
+
         pdb_id = ", ".join(batch["pdb_id"])
         preferred_chain_or_interface = batch["preferred_chain_or_interface"]
         logger.debug(
@@ -357,9 +360,16 @@ class OpenFold3AllAtom(ModelRunner):
             # Compute loss
             loss, loss_breakdown = self.loss(batch, outputs, _return_breakdown=True)
 
+            # Only required when running in distributed mode
+            sync_context = (
+                self.trainer.model.no_sync()
+                if self.trainer.world_size > 1
+                else nullcontext()
+            )
+
             # When using DDP, this disables the automatic sync that would happen on
             # manual_backward and break the per-sample grad clipping
-            with self.no_sync():
+            with sync_context:
                 self.manual_backward(loss)
                 self.grad_manager.clip_and_accumulate()
 
@@ -368,6 +378,7 @@ class OpenFold3AllAtom(ModelRunner):
                 self.grad_manager.sync_grads()
 
                 opt.step()
+                self.lr_schedulers().step()
 
                 # Zero the grad accumulator
                 self.grad_manager.reset_accumulator()

@@ -132,6 +132,8 @@ class PlTrainerArgs(BaseModel):
     enable_checkpointing: bool = True
     enable_model_summary: bool = False
     accumulate_grad_batches: int = 1
+    gradient_clip_val: int | float | None = None
+    gradient_clip_algorithm: str | None = None
 
     # Extra arguments that are not passed directly to pl.Trainer
     deepspeed_config_path: Path | None = None

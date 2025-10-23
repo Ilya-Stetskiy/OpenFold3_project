@@ -16,6 +16,8 @@ import pytorch_lightning as pl
 import torch
 import torch.distributed as dist
 
+from openfold3.core.utils.tensor_utils import tensor_tree_map
+
 
 class PerSampleGradManager:
     """
@@ -40,6 +42,7 @@ class PerSampleGradManager:
         self._model = None
         self._trainer = None
         self._logger = None
+        self._device = None
 
     def setup(
         self, model: torch.nn.Module, trainer: "pl.Trainer", logger: "pl.loggers.Logger"
@@ -62,6 +65,8 @@ class PerSampleGradManager:
             for p in self._model.parameters()
             if p.requires_grad
         ]
+
+        self._device = next(self._model.parameters()).device
 
     def _clip_grads(self):
         """Clips the gradients currently stored in self._model.parameters()"""
@@ -139,9 +144,11 @@ class PerSampleGradManager:
         Checks if the optimizer step should be performed or gradients should be
         accumulated for the current step.
         """
+        if self._trainer.is_last_batch:
+            return True
+
         is_last_step_of_cycle = (batch_idx + 1) % self.accumulate_grad_batches == 0
-        is_last_batch_of_epoch = (batch_idx + 1) == self._trainer.num_training_batches
-        return is_last_step_of_cycle or is_last_batch_of_epoch
+        return is_last_step_of_cycle
 
     def reset_accumulator(self):
         """
@@ -150,3 +157,14 @@ class PerSampleGradManager:
         """
         for acc_grad in self.grad_accumulator:
             acc_grad.zero_()
+
+    @property
+    def device(self):
+        return self._device
+
+    def to(self, device):
+        self.grad_accumulator = tensor_tree_map(
+            lambda t: t.to(device), self.grad_accumulator
+        )
+        self._device = device
+        return self
