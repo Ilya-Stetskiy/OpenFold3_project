@@ -30,7 +30,7 @@ from openfold3.core.data.framework.single_datasets.dataset_utils import (
 from openfold3.core.data.framework.single_datasets.pdb import is_invalid_feature_dict
 from openfold3.core.data.primitives.featurization.structure import (
     extract_starts_entities,
-    make_chain_pair_labels,
+    make_chain_pair_labels_padded,
     make_chain_pair_mask_padded,
 )
 from openfold3.core.data.resources.lists import (
@@ -254,9 +254,9 @@ class ValidationPDBDataset(BaseOF3Dataset):
                 dictionary containing features for the sample and atom array
         Returns:
             dict with two features:
-            - intra_abag_type_atomized [*, n_atoms]
+            - intra_ab_ag_type_atomized [*, n_atoms]
                 per atom integer labels indicating which chain type an atom belongs to
-            - inter_abag_type_atomized [*, n_atoms, n_atoms]
+            - inter_ab_ag_type_atomized [*, n_atoms, n_atoms]
                 per atom pair integer labels indicating which chain pair type an atom
                 pair belongs to
         """
@@ -271,7 +271,7 @@ class ValidationPDBDataset(BaseOF3Dataset):
             if sabdab_annotation:
                 ab_ag_type_to_chain_id[sabdab_annotation].append(int(chain_id))
         # Per-interface maps
-        abag_type_to_chain_id_pair = {t: [] for t in AB_AG_CHAIN_PAIR_TYPES}
+        ab_ag_type_to_chain_id_pair = {t: [] for t in AB_AG_CHAIN_PAIR_TYPES}
         for chain_id_pair in structure_entry["interfaces"]:
             chain_id_i, chain_id_j = chain_id_pair.split("_")
             chain_data_i = structure_entry["chains"][chain_id_i]
@@ -282,12 +282,12 @@ class ValidationPDBDataset(BaseOF3Dataset):
                 if (
                     sabdab_annotation_i,
                     sabdab_annotation_j,
-                ) in abag_type_to_chain_id_pair:
-                    abag_type_to_chain_id_pair[
+                ) in ab_ag_type_to_chain_id_pair:
+                    ab_ag_type_to_chain_id_pair[
                         (sabdab_annotation_i, sabdab_annotation_j)
                     ].append((int(chain_id_i), int(chain_id_j)))
                 else:
-                    abag_type_to_chain_id_pair[
+                    ab_ag_type_to_chain_id_pair[
                         (sabdab_annotation_j, sabdab_annotation_i)
                     ].append((int(chain_id_j), int(chain_id_i)))
 
@@ -299,50 +299,50 @@ class ValidationPDBDataset(BaseOF3Dataset):
         token_mask = sample_data["features"]["token_mask"]
         num_atoms_per_token = sample_data["features"]["num_atoms_per_token"]
 
-        token_abag_type = torch.zeros_like(
+        token_ab_ag_type = torch.zeros_like(
             torch.tensor(token_chain_id),
             dtype=torch.int32,
         )
 
         # Intra
-        for abag_type_int, abag_type_str in enumerate(AB_AG_CHAIN_TYPES, start=1):
+        for ab_ag_type_int, ab_ag_type_str in enumerate(AB_AG_CHAIN_TYPES, start=1):
             mask = torch.tensor(
-                np.isin(token_chain_id, ab_ag_type_to_chain_id[abag_type_str]),
+                np.isin(token_chain_id, ab_ag_type_to_chain_id[ab_ag_type_str]),
                 dtype=torch.int32,
             )
-            token_abag_type += mask * abag_type_int
+            token_ab_ag_type += mask * ab_ag_type_int
 
-        intra_abag_type_atomized = broadcast_token_feat_to_atoms(
+        intra_ab_ag_type_atomized = broadcast_token_feat_to_atoms(
             token_mask=token_mask,
             num_atoms_per_token=num_atoms_per_token,
-            token_feat=token_abag_type,
+            token_feat=token_ab_ag_type,
         ).to(torch.int32)
 
-        features["intra_abag_type_atomized"] = intra_abag_type_atomized
+        features["intra_ab_ag_type_atomized"] = intra_ab_ag_type_atomized
 
         # Inter
         token_chain_id = torch.tensor(token_chain_id, dtype=torch.int32)
-        chain_labels = make_chain_pair_labels(
-            token_chain_id, AB_AG_CHAIN_PAIR_TYPES, abag_type_to_chain_id_pair
+        chain_pair_labels = make_chain_pair_labels_padded(
+            token_chain_id, AB_AG_CHAIN_PAIR_TYPES, ab_ag_type_to_chain_id_pair
         )
-        token_chain_labels = chain_labels[
+        token_pair_labels = chain_pair_labels[
             token_chain_id.unsqueeze(0), token_chain_id.unsqueeze(1)
         ]
 
-        inter_abag_type_atomized = broadcast_token_feat_to_atoms(
+        inter_ab_ag_type_atomized = broadcast_token_feat_to_atoms(
             token_mask=token_mask,
             num_atoms_per_token=num_atoms_per_token,
-            token_feat=token_chain_labels,
+            token_feat=token_pair_labels,
             token_dim=-2,
         )
-        inter_abag_type_atomized = broadcast_token_feat_to_atoms(
+        inter_ab_ag_type_atomized = broadcast_token_feat_to_atoms(
             token_mask=token_mask,
             num_atoms_per_token=num_atoms_per_token,
-            token_feat=inter_abag_type_atomized.transpose(-1, -2),
+            token_feat=inter_ab_ag_type_atomized.transpose(-1, -2),
             token_dim=-2,
         )
-        inter_abag_type_atomized = inter_abag_type_atomized.transpose(-1, -2)
-        features["inter_abag_type_atomized"] = inter_abag_type_atomized
+        inter_ab_ag_type_atomized = inter_ab_ag_type_atomized.transpose(-1, -2)
+        features["inter_ab_ag_type_atomized"] = inter_ab_ag_type_atomized
 
         return features
 

@@ -185,7 +185,8 @@ def make_chain_pair_mask_padded(
             tuples with pairwise interactions to include
     Returns:
         torch.Tensor [n_chains + 1, n_chains + 1] where:
-            - each value [i,j] represents
+            - each value [i, j] represents whether the corresponding chain is masked or
+            not
             - a 0th row and 0th column of all zeros is added as padding
     """
     largest_chain_index = torch.max(token_chain_id)
@@ -200,11 +201,25 @@ def make_chain_pair_mask_padded(
     return chain_mask
 
 
-def make_chain_pair_labels(
+def make_chain_pair_labels_padded(
     token_chain_id: torch.Tensor,
     inter_chain_types: list[str | tuple],
     type_to_chain_id_pair: dict[str | tuple, int],
 ):
+    """Creates a chain pair-wise tensor of chain pair labels.
+    Args:
+        token_chain_id:
+            tensor containing all chain ids in complex
+        inter_chain_types:
+            list of chain pair types
+        type_to_chain_id_pair:
+            dict mapping chain pair types to chain id pairs with given type
+    Returns:
+        torch.Tensor [n_chains + 1, n_chains + 1] where:
+            - each value [i, j] indicates an integer label associated with the
+              corresponding chain pair (enum in the order of inter_chain_types)
+            - a 0th row and 0th column of all zeros is added as padding
+    """
     largest_chain_index = torch.max(token_chain_id)
     chain_labels = torch.zeros(
         (largest_chain_index + 1, largest_chain_index + 1), dtype=torch.int
