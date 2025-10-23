@@ -336,6 +336,9 @@ def convert_pair_rep_to_blocks(
         invalid_mask=invalid_mask_flat_1d,  # Pass 1D flat tensor
     )
 
+    # Reshape plm back to original batch dimensions before returning
+    plm = plm.reshape((*batch_dims, num_blocks, n_query, n_key, plm.shape[-1]))
+
     # Mask out padding
     plm = plm * atom_pair_mask.unsqueeze(-1)
 
