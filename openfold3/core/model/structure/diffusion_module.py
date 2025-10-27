@@ -172,6 +172,7 @@ class DiffusionModule(nn.Module):
         si_input: torch.Tensor,
         si_trunk: torch.Tensor,
         zij_trunk: torch.Tensor,
+        use_conditioning: bool,
         chunk_size: int | None = None,
         use_deepspeed_evo_attention: bool = False,
         use_cueq_triangle_kernels: bool = False,
@@ -199,6 +200,8 @@ class DiffusionModule(nn.Module):
                 [*, N_token, c_s] Single representation
             zij_trunk:
                 [*, N_token, c_s] Pair representation
+            use_conditioning:
+                Whether to condition with the trunk representations
             chunk_size:
                 Inference-time subbatch size
             use_deepspeed_evo_attention:
@@ -218,6 +221,7 @@ class DiffusionModule(nn.Module):
             si_input=si_input,
             si_trunk=si_trunk,
             zij_trunk=zij_trunk,
+            use_conditioning=use_conditioning,
             chunk_size=chunk_size,
         )
 
@@ -316,6 +320,7 @@ class SampleDiffusion(nn.Module):
         zij_trunk: torch.Tensor,
         noise_schedule: torch.Tensor,
         no_rollout_samples: int,
+        use_conditioning: bool = True,
         chunk_size: int | None = None,
         use_deepspeed_evo_attention: bool = False,
         use_cueq_triangle_kernels: bool = False,
@@ -337,6 +342,8 @@ class SampleDiffusion(nn.Module):
                 [no_rollout_steps] Noise schedule
             no_rollout_samples:
                 [no_rollout_samples] Number of samples to generate for rollout
+            use_conditioning:
+                Whether to condition with the trunk representations
             chunk_size:
                 Inference-time subbatch size
             use_deepspeed_evo_attention:
@@ -383,6 +390,7 @@ class SampleDiffusion(nn.Module):
                 si_input=si_input,
                 si_trunk=si_trunk,
                 zij_trunk=zij_trunk,
+                use_conditioning=use_conditioning,
                 chunk_size=chunk_size,
                 use_deepspeed_evo_attention=use_deepspeed_evo_attention,
                 use_cueq_triangle_kernels=use_cueq_triangle_kernels,
