@@ -382,9 +382,6 @@ class TrainingExperimentRunner(ExperimentRunner):
             accum_grad_batches = (
                 self.model_config.settings.manual_optimization.accumulate_grad_batches
             )
-            self.data_module_config.epoch_len = (
-                self.data_module_config.epoch_len * accum_grad_batches
-            )
 
             self.pl_trainer_args.log_every_n_steps = (
                 self.pl_trainer_args.log_every_n_steps * accum_grad_batches
