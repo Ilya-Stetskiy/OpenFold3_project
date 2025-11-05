@@ -179,8 +179,9 @@ class PerSampleGradManager:
             self.accum_count, dtype=torch.float32, device=self.device
         )
 
-        if self._trainer.world_size > 1:
-            dist.all_reduce(local_count, op=dist.ReduceOp.SUM)
+        local_count = self._trainer.strategy.reduce(
+            local_count, reduce_op=dist.ReduceOp.SUM
+        )
 
         global_count = local_count.item()
 
@@ -222,8 +223,9 @@ class PerSampleGradManager:
         flat_grad = _flatten_dense_tensors(grads_to_bucket).float()
 
         # Sum grads across ranks
-        if self._trainer.world_size > 1:
-            dist.all_reduce(flat_grad, op=dist.ReduceOp.SUM)
+        flat_grad = self._trainer.strategy.reduce(
+            flat_grad, reduce_op=dist.ReduceOp.SUM
+        )
 
         # Average by number of samples
         flat_grad.div_(global_count)

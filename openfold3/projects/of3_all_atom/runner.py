@@ -81,7 +81,6 @@ class OpenFold3AllAtom(ModelRunner):
             model_config.settings.gradient_clipping.per_sample_clipping
         )
         self.grad_manager = None
-        self._loaded_opt_state = None
         if self.per_sample_grad_clipping:
             self.grad_manager = PerSampleGradManager(
                 gradient_clip_val=model_config.settings.gradient_clipping.clip_val,
@@ -735,13 +734,6 @@ class OpenFold3AllAtom(ModelRunner):
                 if "initial_lr" not in group:
                     group["initial_lr"] = optimizer_config.learning_rate
 
-        # When running with manual optimization, we need to manually load the
-        # optimizer states on restart
-        if self._loaded_opt_state is not None:
-            print("Manually loading optimizer state...")
-            optimizer.load_state_dict(self._loaded_opt_state[0])
-            self._loaded_opt_state = None
-
         lr_sched_config = self.config.settings.lr_scheduler
         lr_scheduler = AlphaFoldLRScheduler(
             optimizer,
@@ -765,12 +757,6 @@ class OpenFold3AllAtom(ModelRunner):
     def on_load_checkpoint(self, checkpoint):
         ema = checkpoint["ema"]
         self.ema.load_state_dict(ema)
-
-        # When running with manual optimization, we need to manually load the
-        # optimizer states on restart
-        # TODO: Make this configurable
-        if self.per_sample_grad_clipping and "optimizer_states" in checkpoint:
-            self._loaded_opt_state = checkpoint["optimizer_states"]
 
     def _compute_confidence_scores(self, batch: dict, outputs: dict) -> dict:
         """Compute confidence metrics. This function is called during inference.
