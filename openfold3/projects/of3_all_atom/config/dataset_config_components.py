@@ -101,6 +101,7 @@ class MSASettings(BaseModel):
         "concat_cfdb_uniref100_filtered",
         "colabfold_main",
     ]
+    keep_subsampled_order: bool = False
     paired_msa_order: list = ["colabfold_paired"]
 
 

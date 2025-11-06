@@ -384,7 +384,7 @@ def main(
         **experiment_cfg.data_module_args.model_dump(),
     )
 
-    # Flatten/normalize into the "multi dataset" structure your logging wrappers expect
+    # Flatten/normalize into the "multi dataset" structure the logging wrappers expect
     multi_dataset_config = DataModule.parse_data_config(data_module_config.datasets)
 
     # Wrap each dataset in logging

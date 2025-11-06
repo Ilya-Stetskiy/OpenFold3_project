@@ -1187,6 +1187,7 @@ def create_main(
     msa_array_collection: MsaArrayCollection,
     chain_id_to_paired_msa: dict[str, MsaArray],
     aln_order: list[str],
+    keep_subsampled_order: bool,
 ) -> dict[str, MsaArray]:
     """Creates main MSA arrays from non-UniProt MSAs.
 
@@ -1199,13 +1200,16 @@ def create_main(
         chain_id_to_paired_msa (dict[str, MsaArray]):
             Dict of paired Msa objects per chain.
         aln_order (list[str]):
-            The order in which to concatenate the main MSA arrays vertically.
-            Alignments not in this list are not added to the main MSA.
+            The order in which to concatenate the main MSA arrays vertically. Alignments
+            not in this list are not added to the main MSA.
+        keep_subsampled_order (bool):
+            Whether to keep the order of sequences in the subsampled main MSA relative
+            to the unsubsampled one.
 
     Returns:
         dict[str, MsaArray]:
-            List of MsaArrays containing the main MSA arrays and deletion matrices
-            for each chain.
+            List of MsaArrays containing the main MSA arrays and deletion matrices for
+            each chain.
     """
     # Iterate over representatives
     rep_main_msas = {}
@@ -1254,9 +1258,17 @@ def create_main(
             filtered_msa = main_msa_redundant
             filtered_deletion = main_deletion_matrix_redundant
 
+        # Get indices for subsampled main MSA - should be seeded by the worker context
+        rng = np.random.default_rng()
+        k = rng.integers(1, filtered_msa.shape[0] + 1)
+        idx = rng.choice(filtered_msa.shape[0], size=k, replace=False)
+        if keep_subsampled_order:
+            idx.sort()
+
+        # Add to ID-MSA map
         rep_main_msas[rep_id] = MsaArray(
-            msa=filtered_msa,
-            deletion_matrix=filtered_deletion,
+            msa=filtered_msa[idx, :],
+            deletion_matrix=filtered_deletion[idx, :],
             metadata=pd.DataFrame(),
         )
 

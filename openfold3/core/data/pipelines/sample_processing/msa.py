@@ -58,6 +58,7 @@ def process_msas_of3(
     alignment_array_directory: Path | None,
     max_seq_counts: dict[str, int | float],
     aln_order: list[str],
+    keep_subsampled_order: bool,
     max_rows_paired: int,
     min_chains_paired_partial: int,
     pairing_mask_keys: list[str],
@@ -67,16 +68,15 @@ def process_msas_of3(
 ) -> MsaArrayCollection:
     """Prepares the arrays needed to create MSA feature tensors.
 
-    Follows the logic of the AF3 SI in sections 2.2 and 2.3.
-    1. Query sequence
-    2. Paired sequences from UniProt
+    Follows the logic of the AF3 SI in sections 2.2 and 2.3. 1. Query sequence 2. Paired
+    sequences from UniProt
         - only if n unique protein chains > 1
         - exclude block-diagonal unpaired sequences if min_chains_paired_partial = 2
         - only protein-protein chains are paired
     3. Main MSAs for each chain with unpaired sequences from non-UniProt databases
 
-    Note: The returned MsaProcessedCollection contains None for the query_sequences
-    if there are no protein or RNA chains in the crop.
+    Note: The returned MsaProcessedCollection contains None for the query_sequences if
+    there are no protein or RNA chains in the crop.
 
     Args:
         atom_array (AtomArray):
@@ -102,6 +102,9 @@ def process_msas_of3(
         aln_order (list[str]):
             A list of strings matching the alignment file names, indicating the order in
             which they should be concatenated to form the main MSA.
+        keep_subsampled_order (bool):
+            Whether to keep the order of subsampled main MSA rows related to the
+            unsubsampled main MSA rows.
         max_rows_paired (int):
             The maximum number of rows to keep in the paired MSA.
         min_chains_paired_partial (int):
@@ -113,8 +116,8 @@ def process_msas_of3(
         msas_to_pair (list[str]):
             List of MSAs to pair for online pairing. If empty, no pairing will be done
         use_roda_monomer_format (bool):
-            Whether input data is expected to be in the s3 RODA monomer
-            format: <aln_dir>/<mgy_id>/alignment.npz
+            Whether input data is expected to be in the s3 RODA monomer format:
+            <aln_dir>/<mgy_id>/alignment.npz
     Returns:
         MsaArrayCollection:
             The collection of MsaArrays in the processed state.
@@ -161,6 +164,7 @@ def process_msas_of3(
             msa_array_collection=msa_array_collection,
             chain_id_to_paired_msa=chain_id_to_paired_msa,
             aln_order=aln_order,
+            keep_subsampled_order=keep_subsampled_order,
         )
 
     # Skip MSA processing if there are no protein or RNA chains
@@ -191,7 +195,11 @@ class MsaSampleProcessor:
             pairing_mask_keys=config.pairing_mask_keys,
             msas_to_pair=config.msas_to_pair,
         )
-        self.main_msa_processor = partial(create_main, aln_order=config.aln_order)
+        self.main_msa_processor = partial(
+            create_main,
+            aln_order=config.aln_order,
+            keep_subsampled_order=config.keep_subsampled_order,
+        )
 
     def create_query_seq(
         self,
