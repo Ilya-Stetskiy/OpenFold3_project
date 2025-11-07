@@ -65,6 +65,7 @@ class TestDiffusionModule(unittest.TestCase):
             si_input=si_input,
             si_trunk=si_trunk,
             zij_trunk=zij_trunk,
+            use_conditioning=True,
         )
 
         self.assertTrue(xl.shape == (batch_size, n_atom, 3))
@@ -108,6 +109,7 @@ class TestDiffusionModule(unittest.TestCase):
             si_input=si_input,
             si_trunk=si_trunk,
             zij_trunk=zij_trunk,
+            use_conditioning=True,
         )
 
         self.assertTrue(xl.shape == (batch_size, n_sample, n_atom, 3))
@@ -160,6 +162,7 @@ class TestSampleDiffusion(unittest.TestCase):
                 zij_trunk=zij_trunk,
                 noise_schedule=noise_schedule,
                 no_rollout_samples=no_rollout_samples,
+                use_conditioning=True,
             )
 
         self.assertTrue(xl.shape == (batch_size, no_rollout_samples, n_atom, 3))

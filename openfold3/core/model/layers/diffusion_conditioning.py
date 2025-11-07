@@ -210,6 +210,7 @@ class DiffusionConditioning(nn.Module):
         si_input: torch.Tensor,
         si_trunk: torch.Tensor,
         zij_trunk: torch.Tensor,
+        use_conditioning: bool,
         chunk_size: int | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """
@@ -224,6 +225,8 @@ class DiffusionConditioning(nn.Module):
                 [*, N_token, c_s] Single representation
             zij_trunk:
                 [*, N_token, N_token, c_z] Pair representation
+            use_conditioning:
+                Whether to condition with the trunk representations
             chunk_size:
                 Inference-time subbatch size. Acts as a minimum if
                 self.tune_chunk_size is True
@@ -234,6 +237,11 @@ class DiffusionConditioning(nn.Module):
                 [*, N_token, N_token, c_z] Conditioned pair representation
         """
         token_mask = batch["token_mask"]
+
+        if not use_conditioning:
+            si_trunk = si_trunk * 0
+            zij_trunk = zij_trunk * 0
+
         si, zij = self._embed_trunk_inputs(
             batch=batch, t=t, si_input=si_input, si_trunk=si_trunk, zij_trunk=zij_trunk
         )

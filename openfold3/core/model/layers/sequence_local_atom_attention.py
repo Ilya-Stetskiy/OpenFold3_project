@@ -25,8 +25,8 @@ import openfold3.core.config.default_linear_init_config as lin_init
 from openfold3.core.model.layers.diffusion_transformer import DiffusionTransformer
 from openfold3.core.model.primitives import LayerNorm, Linear
 from openfold3.core.utils.atom_attention_block_utils import (
+    convert_pair_rep_to_blocks,
     convert_single_rep_to_blocks,
-    convert_trunk_pair_rep_to_blocks,
 )
 from openfold3.core.utils.atomize_utils import (
     aggregate_atom_feat_to_tokens,
@@ -249,7 +249,7 @@ class NoisyPositionEmbedder(nn.Module):
 
         # Broadcast trunk pair representation into atom pair conditioning
         zij_trunk = self.linear_z(self.layer_norm_z(zij_trunk))
-        zij_trunk = convert_trunk_pair_rep_to_blocks(
+        zij_trunk = convert_pair_rep_to_blocks(
             batch=batch, zij_trunk=zij_trunk, n_query=n_query, n_key=n_key
         )
         plm = plm + zij_trunk

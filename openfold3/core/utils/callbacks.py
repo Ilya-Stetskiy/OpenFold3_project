@@ -82,14 +82,13 @@ class PredictTimer(pl.Callback):
             runtime_file.write_text(json.dumps(runtime_json, indent=4))
 
 
-def set_seed_for_rank(seed: int, rank: int, deterministic: bool = False) -> None:
+def set_seed_for_rank(seed: int, rank: int) -> None:
     """
     Sets the seed for all relevant random number generators on a specific rank.
 
     Args:
         seed (int): The base seed to use.
         rank (int): The process rank, used to create a unique seed for the process.
-        deterministic (bool): Whether to set torch deterministic flags.
     """
     # Calculate a unique seed for each rank
     rank_specific_seed = seed + rank
@@ -103,10 +102,6 @@ def set_seed_for_rank(seed: int, rank: int, deterministic: bool = False) -> None
     # Set seed for PyTorch on CPU and CUDA
     torch.manual_seed(rank_specific_seed)
     torch.cuda.manual_seed_all(rank_specific_seed)  # Seeds all GPUs
-
-    if deterministic:
-        torch.backends.cudnn.deterministic = True
-        torch.backends.cudnn.benchmark = False
 
 
 class RankSpecificSeedCallback(pl.Callback):

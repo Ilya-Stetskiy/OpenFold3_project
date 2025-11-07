@@ -128,7 +128,6 @@ model_config = mlc.ConfigDict(
             "clear_cache_between_steps": False,
             "train_confidence_only": train_confidence_only,
             "optimizer": {
-                "use_deepspeed_adam": False,
                 "learning_rate": 1.8e-3,
                 "beta1": 0.9,
                 "beta2": 0.95,
@@ -146,6 +145,10 @@ model_config = mlc.ConfigDict(
                 "per_sample_clipping": True,
                 "clip_val": 10.0,
             },
+            "manual_optimization": {
+                "accumulate_grad_batches": 1,
+                "log_lr": False,
+            },
             "model_selection_weight_scheme": "initial_training",
             "debug": {
                 "log_grad_norm": False,
@@ -160,6 +163,7 @@ model_config = mlc.ConfigDict(
                 "c_s": c_s,
                 "c_z": c_z,
                 "num_recycles": 3,
+                "use_confidence_emb_prob": 1.0,  # Change to 0.8 after confirming
                 "diffusion": {
                     "sigma_data": sigma_data,
                     "no_samples": 48,
@@ -167,6 +171,7 @@ model_config = mlc.ConfigDict(
                     "no_full_rollout_samples": 5,
                     "no_mini_rollout_steps": 20,
                     "no_full_rollout_steps": 200,
+                    "use_conditioning_prob": 1.0,  # Change to 0.8 after confirming
                 },
             },
             "input_embedder": {
@@ -483,6 +488,7 @@ model_config = mlc.ConfigDict(
                     "ligand_weight": 10.0,
                     "eps": eps,
                     "chunk_size": None,
+                    "use_sparse_loss": False,
                 },
                 "distogram": {
                     "no_bins": 64,
