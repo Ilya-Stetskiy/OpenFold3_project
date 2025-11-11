@@ -382,12 +382,6 @@ class OpenFold3AllAtom(ModelRunner):
         opt.zero_grad()
 
         try:
-            # Run the model
-            batch, outputs = self.model(batch)
-
-            # Compute loss
-            loss, loss_breakdown = self.loss(batch, outputs, _return_breakdown=True)
-
             # Only required when running in distributed mode
             sync_context = (
                 self.trainer.model.no_sync()
@@ -398,6 +392,12 @@ class OpenFold3AllAtom(ModelRunner):
             # When using DDP, this disables the automatic sync that would happen on
             # manual_backward and break the per-sample grad clipping
             with sync_context:
+                # Run the model
+                batch, outputs = self.model(batch)
+
+                # Compute loss
+                loss, loss_breakdown = self.loss(batch, outputs, _return_breakdown=True)
+
                 self.manual_backward(loss)
                 self.grad_manager.clip_and_accumulate(logging_info=logging_info)
 
