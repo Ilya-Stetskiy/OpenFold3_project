@@ -115,8 +115,14 @@ class ModelRunner(pl.LightningModule):
 
         return loss
 
-    def on_before_zero_grad(self, *args, **kwargs):
-        self.ema.update(self.model)
+    def on_train_batch_end(self, outputs, batch, batch_idx):
+        # Update EMA weights after optimizer step
+        # Skip grad accumulation steps
+        is_last_step_of_cycle = (
+            batch_idx + 1
+        ) % self.trainer.accumulate_grad_batches == 0
+        if is_last_step_of_cycle or self.trainer.is_last_batch:
+            self.ema.update(self.model)
 
     def eval_step(self, batch, batch_idx):
         # At the start of validation, load the EMA weights

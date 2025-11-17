@@ -139,7 +139,10 @@ class RefAtomFeatureEmbedder(nn.Module):
             atom_mask=batch["atom_mask"],
         )
         v_l, v_m, _ = convert_single_rep_to_blocks(
-            ql=batch["ref_space_uid"].unsqueeze(-1), n_query=n_query, n_key=n_key
+            ql=batch["ref_space_uid"].unsqueeze(-1),
+            n_query=n_query,
+            n_key=n_key,
+            atom_mask=batch["atom_mask"],
         )
 
         # dlm: [*, N_blocks, N_query, N_key, 3]

@@ -24,7 +24,7 @@ from pathlib import Path
 
 import pytorch_lightning as pl
 import torch
-from pytorch_lightning.trainer import call
+from pytorch_lightning.strategies import DDPStrategy, DeepSpeedStrategy
 from torchmetrics import MeanMetric, MetricCollection, PearsonCorrCoef
 
 from openfold3.core.loss.loss_module import OpenFold3Loss
@@ -38,7 +38,7 @@ from openfold3.core.metrics.validation_all_atom import (
     get_metrics_chunked,
 )
 from openfold3.core.runners.model_runner import ModelRunner
-from openfold3.core.utils.grad_manager import PerSampleGradManager
+from openfold3.core.utils.grad_manager import PerSampleGradManager, compute_global_norm
 from openfold3.core.utils.lr_schedulers import AlphaFoldLRScheduler
 from openfold3.core.utils.tensor_utils import tensor_tree_map
 from openfold3.core.utils.timing import PerformanceTimer
@@ -57,7 +57,6 @@ from openfold3.projects.of3_all_atom.model import OpenFold3
 deepspeed_is_installed = importlib.util.find_spec("deepspeed") is not None
 if deepspeed_is_installed:
     import deepspeed
-    from deepspeed.ops.adam import DeepSpeedCPUAdam
 
 logger = logging.getLogger(__name__)
 
@@ -85,7 +84,7 @@ class OpenFold3AllAtom(ModelRunner):
             self.grad_manager = PerSampleGradManager(
                 gradient_clip_val=model_config.settings.gradient_clipping.clip_val,
                 accumulate_grad_batches=model_config.settings.manual_optimization.accumulate_grad_batches,
-                log_grad_norm=model_config.settings.manual_optimization.log_grad_norm,
+                log_grad_norm=model_config.settings.debug.log_grad_norm,
             )
             self.automatic_optimization = False
             self.log_lr = model_config.settings.manual_optimization.log_lr
@@ -328,18 +327,30 @@ class OpenFold3AllAtom(ModelRunner):
                     sync_dist=False,
                 )
 
+    def _is_opt_step_ready(self, batch_idx: int) -> bool:
+        """
+        Checks if the optimizer step should be performed.
+        Used in manual mode.
+        """
+        if self.per_sample_grad_clipping:
+            accum_steps = self.grad_manager.accumulate_grad_batches
+        else:
+            accum_steps = self.trainer.accumulate_grad_batches
+
+        is_last_step_of_cycle = (batch_idx + 1) % accum_steps == 0
+        return is_last_step_of_cycle or self.trainer.is_last_batch
+
     def _training_step_manual_clip(self, batch, batch_idx):
         assert len(batch["pdb_id"]) == 1, (
             "Currently only local batch size of 1 per GPU is supported."
         )
 
-        assert not self.deepspeed_is_initialized, (
-            "Per-sample gradient clipping is not supported with DeepSpeed."
-        )
+        if self.trainer.world_size > 1:
+            assert isinstance(self.trainer.strategy, DDPStrategy), (
+                "Per-sample gradient clipping is only supported with DDPStrategy."
+            )
 
-        example_feat = next(
-            iter(v for v in batch.values() if isinstance(v, torch.Tensor))
-        )
+        example_feat = batch["token_mask"]
         if self.ema.device != example_feat.device:
             self.ema.to(example_feat.device)
 
@@ -370,12 +381,6 @@ class OpenFold3AllAtom(ModelRunner):
         opt.zero_grad()
 
         try:
-            # Run the model
-            batch, outputs = self.model(batch)
-
-            # Compute loss
-            loss, loss_breakdown = self.loss(batch, outputs, _return_breakdown=True)
-
             # Only required when running in distributed mode
             sync_context = (
                 self.trainer.model.no_sync()
@@ -386,28 +391,23 @@ class OpenFold3AllAtom(ModelRunner):
             # When using DDP, this disables the automatic sync that would happen on
             # manual_backward and break the per-sample grad clipping
             with sync_context:
+                # Run the model
+                batch, outputs = self.model(batch)
+
+                # Compute loss
+                loss, loss_breakdown = self.loss(batch, outputs, _return_breakdown=True)
+
                 self.manual_backward(loss)
                 self.grad_manager.clip_and_accumulate(logging_info=logging_info)
 
-            if self.grad_manager.is_step_ready(batch_idx):
+            if self._is_opt_step_ready(batch_idx):
                 # Average and sync grads
-                self.grad_manager.sync_grads()
+                self.grad_manager.sync_and_average_grads()
 
                 self.grad_manager.log_average_grad_norm()
 
-                # Manually call this hook since it's bypassed in manual opt loop
-                call._call_lightning_module_hook(
-                    self.trainer, "on_before_optimizer_step", opt
-                )
-
                 opt.step()
                 self.lr_schedulers().step()
-
-                # Manually trigger the `on_before_zero_grad` hook after the step
-                # Ensures EMA uses the latest weights, despite hook name timing
-                call._call_lightning_module_hook(
-                    self.trainer, "on_before_zero_grad", opt
-                )
 
                 # Zero the grad accumulator
                 self.grad_manager.reset_accumulator()
@@ -432,11 +432,9 @@ class OpenFold3AllAtom(ModelRunner):
                     log_train_step_metrics=True,
                 )
 
-                # Extremely dumb workaround for PL step logging issues. Avoids using
+                # Workaround for PL step logging issues. Avoids using
                 # `self.trainer.fit_loop.epoch_loop._batches_that_stepped` if this
                 # metric exists.
-                # TODO: Consider just using self.logger.log_metrics()
-                #  instead and just bypass PL self.log() entirely.
                 self.log(
                     "step",
                     self.global_step,
@@ -471,9 +469,7 @@ class OpenFold3AllAtom(ModelRunner):
         return loss
 
     def _training_step(self, batch):
-        example_feat = next(
-            iter(v for v in batch.values() if isinstance(v, torch.Tensor))
-        )
+        example_feat = batch["token_mask"]
         if self.ema.device != example_feat.device:
             self.ema.to(example_feat.device)
 
@@ -510,17 +506,6 @@ class OpenFold3AllAtom(ModelRunner):
         return self._training_step(batch=batch)
 
     def eval_step(self, batch, batch_idx):
-        # At the start of validation, load the EMA weights
-        if self.cached_weights is None:
-            # model.state_dict() contains references to model weights rather
-            # than copies. Therefore, we need to clone them before calling
-            # load_state_dict().
-            def clone_param(t):
-                return t.detach().clone()
-
-            self.cached_weights = tensor_tree_map(clone_param, self.model.state_dict())
-            self.model.load_state_dict(self.ema.state_dict()["params"])
-
         pdb_id = batch["pdb_id"]
         is_repeated_sample = batch.get("repeated_sample")
         if is_repeated_sample:
@@ -578,28 +563,46 @@ class OpenFold3AllAtom(ModelRunner):
                 f"{self.trainer.train_dataloader.dataset.indices=}"
             )
 
-    @property
-    def deepspeed_is_initialized(self):
-        return deepspeed_is_installed and deepspeed.comm.comm.is_initialized()
+    def on_validation_epoch_start(self):
+        # At the start of validation, load the EMA weights
+
+        assert self.cached_weights is None
+
+        # model.state_dict() contains references to model weights rather
+        # than copies. Therefore, we need to clone them before calling
+        # load_state_dict().
+        self.cached_weights = tensor_tree_map(
+            lambda t: t.detach().clone(), self.model.state_dict()
+        )
+
+        self.model.load_state_dict(self.ema.state_dict()["params"])
 
     def on_before_optimizer_step(self, *args, **kwargs):
-        """Logs the single-transition layer linear_out gradients.
+        """
+        Logs unclipped grad norm and gradients for the single-transition
+        linear_out layers. This logging can be enabled in config.settings.debug.
 
         These gradients can be associated with instabilities, so we're logging them on
         every single step (bypassing log_every_n_steps) for more accurate monitoring.
         """
         debug_settings = self.config.settings.debug
-        should_log_extra_metrics = debug_settings.log_extra_grad_metrics
-        is_logging_disabled = self.logger is None
-        has_frozen_params = self.config.settings.train_confidence_only
 
-        if is_logging_disabled or has_frozen_params or not should_log_extra_metrics:
+        # Transition layers included in this logging are frozen when
+        # training confidence only
+        should_log_extra_metrics = (
+            False
+            if self.config.settings.train_confidence_only
+            else debug_settings.log_extra_grad_metrics
+        )
+        should_log_grad_norm = debug_settings.log_grad_norm
+
+        if not should_log_extra_metrics and not should_log_grad_norm:
             return
 
-        single_transition_grads = {}
+        extra_grad_metrics = {}
 
         # Only rank zero will actually log the gradients
-        log_grad_metrics = self.trainer.is_global_zero
+        log_grad_metrics = self.trainer.is_global_zero and self.logger is not None
 
         # Only log 4 representative blocks to reduce overhead
         block_idxs = [0, 16, 32, 47]
@@ -618,27 +621,36 @@ class OpenFold3AllAtom(ModelRunner):
         )
 
         with context:
-            for idx in block_idxs:
-                block = self.model.pairformer_stack.blocks[idx]
-                param = block.single_transition.linear_out.weight
+            if should_log_extra_metrics:
+                for idx in block_idxs:
+                    block = self.model.pairformer_stack.blocks[idx]
+                    param = block.single_transition.linear_out.weight
 
-                if self.deepspeed_is_initialized:
-                    # Needs to be called on every rank to avoid hanging
-                    # https://github.com/deepspeedai/DeepSpeed/issues/7117#issuecomment-2717974187
-                    grad = deepspeed.utils.safe_get_full_grad(param)
-                else:
-                    grad = param.grad
+                    if isinstance(self.trainer.strategy, DeepSpeedStrategy):
+                        # Needs to be called on every rank to avoid hanging
+                        # https://github.com/deepspeedai/DeepSpeed/issues/7117#issuecomment-2717974187
+                        grad = deepspeed.utils.safe_get_full_grad(param)
+                    else:
+                        grad = param.grad
 
-                assert not grad.requires_grad
+                    assert not grad.requires_grad
 
-                if log_grad_metrics:
-                    tag = (
-                        f"extra_gradients/model.pairformer_stack.blocks.{idx}."
-                        "single_transition.linear_out.weight"
-                    )
+                    if log_grad_metrics:
+                        tag = (
+                            f"extra_gradients/model.pairformer_stack.blocks.{idx}."
+                            "single_transition.linear_out.weight"
+                        )
 
-                    single_transition_grads[f"{tag}_norm"] = grad.norm().item()
-                    single_transition_grads[f"{tag}_max"] = grad.abs().max().item()
+                        extra_grad_metrics[f"{tag}_norm"] = grad.norm().item()
+                        extra_grad_metrics[f"{tag}_max"] = grad.abs().max().item()
+
+            if not self.per_sample_grad_clipping and should_log_grad_norm:
+                # Compute global grad norm for per-batch grad clipping
+                # Per sample clipping handles this logging in the grad manager
+                global_norm, _ = compute_global_norm(parameters=self.model.parameters())
+                extra_grad_metrics["extra_gradients/avg_unclipped_grad_norm"] = (
+                    global_norm.item()
+                )
 
         if log_grad_metrics:
             context = (
@@ -649,7 +661,7 @@ class OpenFold3AllAtom(ModelRunner):
             with context:
                 # NOTE: This out-of-schedule logging might interact a bit weirdly with
                 # the WandB Step, so always plot against trainer/global_step
-                self.logger.log_metrics(single_transition_grads, step=self.global_step)
+                self.logger.log_metrics(extra_grad_metrics, step=self.global_step)
 
     def _log_epoch_metrics(
         self, metrics: MetricCollection, compute_model_selection: bool = False
@@ -662,17 +674,26 @@ class OpenFold3AllAtom(ModelRunner):
         if not self.trainer.sanity_checking:
             # Sync and reduce metrics across ranks
             metrics_output = metrics.compute()
-            for name, result in metrics_output.items():
-                # Only log metrics that have been updated
-                if self.metric_enabled.get(name):
-                    self.log(
-                        name,
-                        result,
-                        on_step=False,
-                        on_epoch=True,
-                        logger=True,
-                        sync_dist=False,  # Already synced in compute()
-                    )
+            if self.per_sample_grad_clipping:
+                enabled_metrics = {
+                    name: result
+                    for name, result in metrics_output.items()
+                    if self.metric_enabled.get(name)
+                }
+                if self.logger is not None:
+                    self.logger.log_metrics(enabled_metrics, step=self.global_step)
+            else:
+                for name, result in metrics_output.items():
+                    # Only log metrics that have been updated
+                    if self.metric_enabled.get(name):
+                        self.log(
+                            name,
+                            result,
+                            on_step=False,
+                            on_epoch=True,
+                            logger=True,
+                            sync_dist=False,  # Already synced in compute()
+                        )
 
             if compute_model_selection:
                 model_selection = compute_final_model_selection_metric(
@@ -680,17 +701,49 @@ class OpenFold3AllAtom(ModelRunner):
                     model_selection_weights=self.model_selection_weights,
                 )
 
-                self.log(
-                    "val/model_selection",
-                    model_selection,
-                    on_step=False,
-                    on_epoch=True,
-                    logger=True,
-                    sync_dist=False,
-                )
+                if self.per_sample_grad_clipping and self.logger is not None:
+                    self.logger.log_metrics(
+                        {"val/model_selection": model_selection}, step=self.global_step
+                    )
+                else:
+                    self.log(
+                        "val/model_selection",
+                        model_selection,
+                        on_step=False,
+                        on_epoch=True,
+                        logger=True,
+                        sync_dist=False,
+                    )
 
         # Reset metrics for next epoch
         metrics.reset()
+
+    def on_train_batch_end(self, outputs, batch, batch_idx):
+        """Called after optimizer.step(). Gradients are present and clipped."""
+
+        # Skip grad accumulation steps
+        if not self._is_opt_step_ready(batch_idx):
+            return
+
+        # EMA weight update
+        self.ema.update(self.model)
+
+        # Log the clipped step norm when not using per-sample gradient clipping
+        # In order to match the logging step of per-sample grad clipping,
+        # the step is shifted by 1
+        should_log_grad_norm = (
+            self.config.settings.debug.log_grad_norm and self.logger is not None
+        )
+        if (
+            not self.per_sample_grad_clipping
+            and should_log_grad_norm
+            and self.trainer.global_step > 0
+        ):
+            global_norm, _ = compute_global_norm(parameters=self.model.parameters())
+            self.logger.log_metrics(
+                {"extra_gradients/avg_clipped_grad_norm": global_norm.item()},
+                step=self.global_step - 1,
+            )
 
     def on_train_epoch_end(self):
         """Log aggregated epoch metrics for training."""
@@ -715,21 +768,12 @@ class OpenFold3AllAtom(ModelRunner):
     def configure_optimizers(self) -> dict:
         optimizer_config = self.config.settings.optimizer
 
-        if deepspeed_is_installed and optimizer_config.use_deepspeed_adam:
-            optimizer = DeepSpeedCPUAdam(
-                self.parameters(),
-                lr=optimizer_config.learning_rate,
-                betas=(optimizer_config.beta1, optimizer_config.beta2),
-                eps=optimizer_config.eps,
-                adamw_mode=False,
-            )
-        else:
-            optimizer = torch.optim.Adam(
-                self.model.parameters(),
-                lr=optimizer_config.learning_rate,
-                betas=(optimizer_config.beta1, optimizer_config.beta2),
-                eps=optimizer_config.eps,
-            )
+        optimizer = torch.optim.Adam(
+            self.model.parameters(),
+            lr=optimizer_config.learning_rate,
+            betas=(optimizer_config.beta1, optimizer_config.beta2),
+            eps=optimizer_config.eps,
+        )
 
         if self.last_lr_step != -1:
             for group in optimizer.param_groups:

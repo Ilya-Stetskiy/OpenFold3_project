@@ -16,6 +16,7 @@
 
 import dataclasses
 import logging
+import traceback
 
 import biotite.structure as struc
 import numpy as np
@@ -110,7 +111,7 @@ def create_template_feature_precursor_of3(
                 # cases to be able to include them or skip them in a way that allows for
                 # retaining the correct number of sampled templates
                 if sum(is_pseudo_beta_atom) != len(residue_starts):
-                    logger.warning(
+                    logger.debug(
                         "Skipping template with non-canonical/missing C-beta atoms."
                     )
                     continue
@@ -151,7 +152,14 @@ def create_template_feature_precursor_of3(
 
                 template_idx += 1
             except Exception as e:
-                logger.warning(f"Skipping template with exception: {e}")
+                tb = traceback.format_exc()
+                logger.debug(
+                    "-" * 40
+                    + "\n"
+                    + f"Skipping template with exception: {str(e)}\n"
+                    + f"Exception type: {type(e).__name__}\nTraceback: {tb}"
+                    + "-" * 40
+                )
                 continue
 
     return OF3TemplateFeaturePrecursor(

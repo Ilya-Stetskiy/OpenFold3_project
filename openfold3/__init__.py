@@ -12,12 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-__all__ = ["core", "projects"]
+__all__ = ["core", "projects", "entry_points", "run_openfold"]
 
 import importlib.util
 
 import gemmi
 from packaging import version
+
+from . import hacks  # noqa: F401
 
 if version.parse(gemmi.__version__) >= version.parse("0.7.3"):
     gemmi.set_leak_warnings(False)

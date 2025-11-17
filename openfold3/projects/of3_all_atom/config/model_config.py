@@ -128,7 +128,6 @@ model_config = mlc.ConfigDict(
             "clear_cache_between_steps": False,
             "train_confidence_only": train_confidence_only,
             "optimizer": {
-                "use_deepspeed_adam": False,
                 "learning_rate": 1.8e-3,
                 "beta1": 0.9,
                 "beta2": 0.95,
@@ -148,11 +147,11 @@ model_config = mlc.ConfigDict(
             },
             "manual_optimization": {
                 "accumulate_grad_batches": 1,
-                "log_grad_norm": False,
                 "log_lr": False,
             },
             "model_selection_weight_scheme": "initial_training",
             "debug": {
+                "log_grad_norm": False,
                 "log_extra_grad_metrics": False,
                 "profile_grad_logging": False,
             },

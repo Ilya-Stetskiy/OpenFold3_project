@@ -23,11 +23,13 @@ import torch
 from openfold3.core.data.framework.single_datasets.abstract_single import (
     register_dataset,
 )
-from openfold3.core.data.framework.single_datasets.base_of3 import BaseOF3Dataset
+from openfold3.core.data.framework.single_datasets.base_of3 import (
+    BaseOF3Dataset,
+)
 from openfold3.core.data.framework.single_datasets.dataset_utils import (
+    check_invalid_feature_dict,
     pad_to_world_size,
 )
-from openfold3.core.data.framework.single_datasets.pdb import is_invalid_feature_dict
 from openfold3.core.data.primitives.featurization.structure import (
     extract_starts_entities,
 )
@@ -146,9 +148,7 @@ class ValidationPDBDataset(BaseOF3Dataset):
                 features["pdb_id"] = pdb_id
                 features["preferred_chain_or_interface"] = "none"
 
-                if is_invalid_feature_dict(features):
-                    index = random.randint(0, len(self) - 1)
-                    return self.__getitem__(index)
+                check_invalid_feature_dict(features)
 
                 features["repeated_sample"] = torch.tensor(
                     [is_repeated_sample], dtype=torch.bool

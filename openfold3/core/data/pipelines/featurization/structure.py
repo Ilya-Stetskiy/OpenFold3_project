@@ -182,8 +182,20 @@ def featurize_structure_of3(
         unique_ids, renum_ids = np.unique(chain_ids_token, return_inverse=True)
         asym_id = torch.tensor(renum_ids + 1, dtype=torch.int32)
 
-        if len(unique_ids) != len(torch.unique_consecutive(asym_id)):
-            logger.warning("Chain IDs are not unique within complex.")
+        unique_asym_ids = torch.unique_consecutive(asym_id)
+        if len(unique_ids) != len(unique_asym_ids):
+            warn_msg = "Chain IDs are not unique within complex."
+            if add_perm_features:
+                # Raise error during training and skip the sample
+                unique_input_asym_ids = torch.unique_consecutive(
+                    torch.tensor(chain_ids_token.astype(int), dtype=torch.int32)
+                )
+                raise ValueError(
+                    f"{warn_msg} Input IDs: {unique_input_asym_ids}, "
+                    f"Asym IDs: {unique_asym_ids}"
+                )
+            else:
+                logger.warning(warn_msg)
 
         features["asym_id"] = asym_id
 

@@ -378,15 +378,6 @@ class TrainingExperimentRunner(ExperimentRunner):
                 )
                 self.pl_trainer_args.accumulate_grad_batches = 1
 
-            # Update the epoch length to account for gradient accumulation
-            accum_grad_batches = (
-                self.model_config.settings.manual_optimization.accumulate_grad_batches
-            )
-
-            self.pl_trainer_args.log_every_n_steps = (
-                self.pl_trainer_args.log_every_n_steps * accum_grad_batches
-            )
-
             # Disable the `LearningRateMonitor` callback, logging is handled
             # manually in the training step
             if self.logging_config.log_lr and self.use_wandb:
@@ -475,9 +466,9 @@ class TrainingExperimentRunner(ExperimentRunner):
         """Determine if WandB should be used.
 
         Returns:
-            True if WandB configuration is provided and is rank zero
+            True if WandB configuration is provided
         """
-        return self.logging_config.wandb_config and self.is_rank_zero
+        return self.logging_config.wandb_config
 
     def _wandb_setup(self) -> None:
         """Initialize WandB logging and store configuration files."""
@@ -487,16 +478,17 @@ class TrainingExperimentRunner(ExperimentRunner):
             self.output_dir,
         )
 
-        if self.is_rank_zero and self.logging_config.log_grads:
-            self.wandb.logger.watch(
-                self.lightning_module, log="gradients", log_graph=False
-            )
+        if self.is_rank_zero:
+            if self.logging_config.log_grads:
+                self.wandb.logger.watch(
+                    self.lightning_module, log="gradients", log_graph=False
+                )
 
-        self.wandb.store_configs(
-            self.experiment_config,
-            self.data_module_config,
-            self.model_config,
-        )
+            self.wandb.store_configs(
+                self.experiment_config,
+                self.data_module_config,
+                self.model_config,
+            )
 
     def _setup_logger(self) -> None:
         """Configure the logging settings.
@@ -684,6 +676,8 @@ class InferenceExperimentRunner(ExperimentRunner):
     def setup(self) -> None:
         """Set up environment and load checkpoints."""
         super().setup()
+        self._log_experiment_config()
+        self._log_model_config()
         logger.info(f"Loading weights from {self.ckpt_path}")
         ckpt = load_checkpoint(self.ckpt_path)
         state_dict = get_state_dict_from_checkpoint(ckpt, init_from_ema_weights=True)
@@ -692,8 +686,6 @@ class InferenceExperimentRunner(ExperimentRunner):
     def run(self, inference_query_set) -> None:
         """Set up the experiment environment."""
         self.inference_query_set = inference_query_set
-        self._log_experiment_config()
-        self._log_model_config()
         if self.experiment_config.experiment_settings.skip_existing:
             inference_query_set = self.remove_completed_queries_from_query_set(
                 inference_query_set
@@ -840,8 +832,10 @@ class WandbHandler:
             id=self.wandb_args.id,
         )
 
-        # Only initialize wandb for rank zero worker
-        # each worker will generate a different id
+        # Only initialize wandb for rank zero worker or
+        # each worker could generate a different id.
+        # Usually handled by WandbLogger, but have seen cases
+        # where it fails to initialize properly.
         if self.is_rank_zero:
             wandb.run = wandb.init(**wandb_init_dict)
 

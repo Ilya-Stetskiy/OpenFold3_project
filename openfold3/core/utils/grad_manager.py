@@ -13,15 +13,46 @@
 # limitations under the License.
 
 import logging
+from collections.abc import Iterable
 
 import pytorch_lightning as pl
 import torch
 import torch.distributed as dist
+from torch._utils import _flatten_dense_tensors, _unflatten_dense_tensors
 from torchmetrics import MaxMetric, MeanMetric
 
 from openfold3.core.utils.tensor_utils import tensor_tree_map
 
 logger = logging.getLogger(__name__)
+
+
+@torch.no_grad()
+def compute_global_norm(
+    parameters: torch.Tensor | Iterable[torch.Tensor],
+) -> [torch.Tensor, list]:
+    """
+    Calculates the global norm of all parameters that have gradients.
+    Args:
+        parameters (Iterable[Tensor] or Tensor): an iterable of Tensors or a
+            single Tensor that will have gradients for norm calculation.
+    Returns:
+        global_norm (torch.Tensor): The scalar global norm.
+        params_with_grad (list): The list of parameters that have gradients.
+    """
+    params_with_grad = [p for p in parameters if p.grad is not None]
+
+    if not params_with_grad:
+        device = next(iter(parameters)).device
+        return torch.tensor(0.0, device=device), []
+
+    # Calculate the total norm of all parameter gradients
+    per_tensor_norms = [
+        torch.linalg.vector_norm(p.grad.float(), ord=2) for p in params_with_grad
+    ]
+
+    global_norm = torch.linalg.vector_norm(torch.stack(per_tensor_norms), ord=2)
+
+    return global_norm, params_with_grad
 
 
 class PerSampleGradManager:
@@ -37,6 +68,13 @@ class PerSampleGradManager:
         accumulate_grad_batches: int = 1,
         log_grad_norm: bool = False,
     ):
+        """
+        Args:
+            gradient_clip_val (int | float | None): The value to clip the global norm of
+                per-sample gradients to
+            accumulate_grad_batches (int): Amount of gradient accumulation steps
+            log_grad_norm (bool): Whether to log gradient norm metrics
+        """
         self.max_grad_norm = gradient_clip_val
         self.accumulate_grad_batches = accumulate_grad_batches
         self.log_grad_norm = log_grad_norm
@@ -96,70 +134,28 @@ class PerSampleGradManager:
             )
 
     @torch.no_grad()
-    def _compute_global_norm(self) -> [torch.Tensor, list]:
-        """
-        Calculates the global norm of all parameters that have gradients.
-
-        Returns:
-            global_norm (torch.Tensor): The scalar global norm.
-            params_with_grad (list): The list of parameters that have gradients.
-        """
-        params_with_grad = [
-            p for p in self._params_to_update.values() if p.grad is not None
-        ]
-
-        if not params_with_grad:
-            return torch.tensor(0.0, device=self.device), []
-
-        # Calculate the total norm of all parameter gradients
-        # Torch version (norm of norms):
-        # per_tensor_norms = [
-        #     torch.linalg.vector_norm(p.grad.float(), ord=2) for p in params_with_grad
-        # ]
-        #
-        # global_norm = torch.linalg.vector_norm(torch.stack(per_tensor_norms), ord=2)
-
-        # Calculate the total squared norm of all parameter gradients
-        total_norm_sq = sum([(p.grad.float() ** 2).sum() for p in params_with_grad])
-        global_norm = torch.sqrt(total_norm_sq)
-
-        return global_norm, params_with_grad
-
-    @torch.no_grad()
     def _clip_grads(self, logging_info: dict | None = None):
         """Clips the gradients currently stored in self._model.parameters()"""
 
-        # Skip clipping if it's disabled
-        if self.max_grad_norm is None or self._max_norm_tensor is None:
-            return
-
-        global_norm, params_with_grad = self._compute_global_norm()
+        global_norm, params_with_grad = compute_global_norm(
+            parameters=self._params_to_update.values()
+        )
 
         if not params_with_grad:
             return
 
-        # Update the metric
+        # Log the metrics even if clipping is disabled
         if self.log_grad_norm:
             self.avg_unclipped_norm_metric.update(global_norm)
             self.max_unclipped_norm_metric.update(global_norm)
 
-        # Only start logging unclipped grads after warmup
-        warning_threshold = self.max_grad_norm * 2.0
-        per_sample_global_norm = global_norm.item()
-        if (
-            logging_info is not None
-            and self._trainer.global_step > 1000
-            and per_sample_global_norm > warning_threshold
-        ):
-            pdb_id = logging_info.get("pdb_id")
-            preferred_chain_or_interface = logging_info.get(
-                "preferred_chain_or_interface"
-            )
-            logger.warning(
-                f"Large gradient norm for {pdb_id} with preferred chain or interface "
-                f"{preferred_chain_or_interface} on rank {self._trainer.global_rank} "
-                f"step {self._trainer.global_step}: {per_sample_global_norm}"
-            )
+        # Skip clipping if it's disabled
+        if self.max_grad_norm is None:
+            return
+
+        self.log_outlier_samples(
+            logging_info=logging_info, global_norm=global_norm.item()
+        )
 
         # Clip norm and compute rescale factor
         # Note: We use maximum here to avoid CPU <-> GPU synchronization that can
@@ -183,25 +179,13 @@ class PerSampleGradManager:
             self.accum_count, dtype=torch.float32, device=self.device
         )
 
-        if self._trainer.world_size > 1:
-            dist.all_reduce(local_count, op=dist.ReduceOp.SUM)
+        local_count = self._trainer.strategy.reduce(
+            local_count, reduce_op=dist.ReduceOp.SUM
+        )
 
         global_count = local_count.item()
 
-        # Log the average unclipped per-sample norm using the metric
-        if global_count > 0 and self.log_grad_norm:
-            avg_per_sample_norm = self.avg_unclipped_norm_metric.compute()
-            max_per_sample_norm = self.max_unclipped_norm_metric.compute()
-
-            if self._logger is not None:
-                self._logger.log_metrics(
-                    {"extra_gradients/avg_unclipped_grad_norm": avg_per_sample_norm},
-                    step=self._trainer.global_step,
-                )
-                self._logger.log_metrics(
-                    {"extra_gradients/max_unclipped_grad_norm": max_per_sample_norm},
-                    step=self._trainer.global_step,
-                )
+        self.log_unclipped_grad_metrics(global_count=global_count)
 
         # If no samples were processed (edge case)
         if global_count == 0:
@@ -211,33 +195,32 @@ class PerSampleGradManager:
                     p.grad.zero_()
             return
 
-        # Sum gradients across all ranks
+        grads_to_bucket = []
+        params_with_grad = []
         for p in self._params_to_update.values():
-            if p.grad is not None:
-                if self._trainer.world_size > 1:
-                    dist.all_reduce(p.grad, op=dist.ReduceOp.SUM)
+            if p.grad is None:
+                p.grad = torch.zeros_like(p)
+            grads_to_bucket.append(p.grad)
+            params_with_grad.append(p)
 
-                # Average by the global total number of samples
-                p.grad.div_(global_count)
-
-    @torch.no_grad()
-    def log_average_grad_norm(self):
-        """
-        Calculates and logs the global norm of the final, averaged gradients.
-        This should be called after sync_grads() and before optimizer.step().
-        """
-        if not self.log_grad_norm or self._logger is None:
+        if not grads_to_bucket:
             return
 
-        global_norm, params_with_grad = self._compute_global_norm()
+        # Flatten all gradients into one large tensor and make sure fp32 is used
+        flat_grad = _flatten_dense_tensors(grads_to_bucket).float()
 
-        if not params_with_grad:
-            return
-
-        self._logger.log_metrics(
-            {"extra_gradients/avg_clipped_grad_norm": global_norm},
-            step=self._trainer.global_step,
+        # Sum grads across ranks
+        flat_grad = self._trainer.strategy.reduce(
+            flat_grad, reduce_op=dist.ReduceOp.SUM
         )
+
+        # Average by number of samples
+        flat_grad.div_(global_count)
+
+        new_grads = _unflatten_dense_tensors(flat_grad, grads_to_bucket)
+
+        for p, new_grad in zip(params_with_grad, new_grads):
+            p.grad.copy_(new_grad)
 
     @torch.no_grad()
     def clip_and_accumulate(self, logging_info: dict | None = None):
@@ -260,7 +243,7 @@ class PerSampleGradManager:
         self.accum_count += 1
 
     @torch.no_grad()
-    def sync_grads(self):
+    def sync_and_average_grads(self):
         """
         Prepares the gradients for the optimizer step.
         1. Copies the summed grads from the grad accumulator to
@@ -276,16 +259,6 @@ class PerSampleGradManager:
 
         # Sync and average globally
         self._sync_and_average_grads()
-
-    def is_step_ready(self, batch_idx: int) -> bool:
-        """
-        Checks if the optimizer step should be performed.
-        """
-        if self._trainer.is_last_batch:
-            return True
-
-        is_last_step_of_cycle = (batch_idx + 1) % self.accumulate_grad_batches == 0
-        return is_last_step_of_cycle
 
     @torch.no_grad()
     def reset_accumulator(self):
@@ -303,6 +276,75 @@ class PerSampleGradManager:
         if self.log_grad_norm:
             self.avg_unclipped_norm_metric.reset()
             self.max_unclipped_norm_metric.reset()
+
+    @torch.no_grad()
+    def log_outlier_samples(
+        self,
+        logging_info: dict | None,
+        global_norm: float,
+        warning_norm_multiplier: float = 5.0,
+        log_after_step: int = 1000,
+    ):
+        # TODO: Tune thresholds and make this more informative
+
+        # Only start logging outlier unclipped grads after warmup by default
+        warning_threshold = self.max_grad_norm * warning_norm_multiplier
+        if (
+            logging_info is not None
+            and self._trainer.global_step > log_after_step
+            and global_norm > warning_threshold
+        ):
+            pdb_id = logging_info.get("pdb_id")
+            preferred_chain_or_interface = logging_info.get(
+                "preferred_chain_or_interface"
+            )
+            logger.warning(
+                f"Large gradient norm for {pdb_id} with preferred chain or interface "
+                f"{preferred_chain_or_interface} on rank {self._trainer.global_rank} "
+                f"step {self._trainer.global_step}: {global_norm}"
+            )
+
+    @torch.no_grad()
+    def log_unclipped_grad_metrics(self, global_count: int):
+        """
+        Logs the average and max of the unclipped per-sample gradient norms
+        seen during accumulation.
+        This should be called after clip_and_accumulate() and before grads are synced.
+        """
+        if global_count > 0 and self.log_grad_norm:
+            avg_per_sample_norm = self.avg_unclipped_norm_metric.compute()
+            max_per_sample_norm = self.max_unclipped_norm_metric.compute()
+
+            if self._logger is not None:
+                self._logger.log_metrics(
+                    {"extra_gradients/avg_unclipped_grad_norm": avg_per_sample_norm},
+                    step=self._trainer.global_step,
+                )
+                self._logger.log_metrics(
+                    {"extra_gradients/max_unclipped_grad_norm": max_per_sample_norm},
+                    step=self._trainer.global_step,
+                )
+
+    @torch.no_grad()
+    def log_average_grad_norm(self):
+        """
+        Calculates and logs the global norm of the final, averaged gradients.
+        This should be called after sync_grads() and before optimizer.step().
+        """
+        if not self.log_grad_norm or self._logger is None:
+            return
+
+        global_norm, params_with_grad = compute_global_norm(
+            parameters=self._params_to_update.values()
+        )
+
+        if not params_with_grad:
+            return
+
+        self._logger.log_metrics(
+            {"extra_gradients/avg_clipped_grad_norm": global_norm},
+            step=self._trainer.global_step,
+        )
 
     @property
     def device(self):

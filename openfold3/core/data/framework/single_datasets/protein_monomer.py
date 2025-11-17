@@ -26,7 +26,9 @@ from openfold3.core.data.framework.single_datasets.abstract_single import (
 from openfold3.core.data.framework.single_datasets.base_of3 import (
     BaseOF3Dataset,
 )
-from openfold3.core.data.framework.single_datasets.pdb import is_invalid_feature_dict
+from openfold3.core.data.framework.single_datasets.dataset_utils import (
+    check_invalid_feature_dict,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -119,9 +121,8 @@ class ProteinMonomerDataset(BaseOF3Dataset):
 
                 features["pdb_id"] = pdb_id
                 features["preferred_chain_or_interface"] = "none"
-                if is_invalid_feature_dict(features):
-                    index = random.randint(0, len(self) - 1)
-                    return self.__getitem__(index)
+
+                check_invalid_feature_dict(features)
 
                 return features
 
