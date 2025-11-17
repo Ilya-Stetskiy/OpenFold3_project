@@ -270,13 +270,13 @@ def random_of3_features(batch_size, n_token, n_msa, n_templ, is_eval=False):
             ),
         },
         "loss_weights": {
-            "bond": torch.Tensor([0.0]).repeat(batch_size),
+            "bond": torch.Tensor([4.0]).repeat(batch_size),
             "smooth_lddt": torch.Tensor([4.0]).repeat(batch_size),
             "mse": torch.Tensor([4.0]).repeat(batch_size),
             "plddt": torch.Tensor([1e-4]).repeat(batch_size),
             "pde": torch.Tensor([1e-4]).repeat(batch_size),
             "experimentally_resolved": torch.Tensor([1e-4]).repeat(batch_size),
-            "pae": torch.Tensor([0.0]).repeat(batch_size),
+            "pae": torch.Tensor([1e-4]).repeat(batch_size),
             "distogram": torch.Tensor([3e-2]).repeat(batch_size),
         },
     }

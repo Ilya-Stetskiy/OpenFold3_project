@@ -108,48 +108,6 @@ dataset_paths:
     template_file_format: pkl
     ccd_file: /path 
 
-  long-monomer-distillation:
-    alignments_directory: none 
-    alignment_db_directory: none 
-    alignment_array_directory: /path/ 
-    dataset_cache_file: /path/ 
-    target_structures_directory: /path 
-    target_structure_file_format: npz
-    reference_molecule_directory: /path/ 
-    template_cache_directory: /path/ 
-    template_structure_array_directory: /path/ 
-    template_structures_directory: none
-    template_file_format: pkl
-    ccd_file: /path 
-
-  short-monomer-distillation:
-    alignments_directory: none 
-    alignment_db_directory: none 
-    alignment_array_directory: /path/ 
-    dataset_cache_file: /path/ 
-    target_structures_directory: /path 
-    target_structure_file_format: npz
-    reference_molecule_directory: /path/ 
-    template_cache_directory: /path/ 
-    template_structure_array_directory: /path/ 
-    template_structures_directory: none
-    template_file_format: pkl
-    ccd_file: /path 
-
-  disordered-pdb:
-    alignments_directory: none 
-    alignment_db_directory: none 
-    alignment_array_directory: /path/ 
-    dataset_cache_file: /path/ 
-    target_structures_directory: /path 
-    target_structure_file_format: npz
-    reference_molecule_directory: /path/ 
-    template_cache_directory: /path/ 
-    template_structure_array_directory: /path/ 
-    template_structures_directory: none
-    template_file_format: pkl
-    ccd_file: /path
-
   val-weighted-pdb:
     alignments_directory: none 
     alignment_db_directory: none 

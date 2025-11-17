@@ -91,6 +91,7 @@ dataset_configs:
             smooth_lddt: 0.0
             experimentally_resolved: 0.0
             plddt: 0.0
+            pae: 0.0
             pde: 0.0
 
 
@@ -115,6 +116,7 @@ dataset_configs:
             smooth_lddt: 0.0
             experimentally_resolved: 0.0
             plddt: 0.0
+            pae: 0.0
             pde: 0.0
 
 
@@ -139,6 +141,7 @@ dataset_configs:
             smooth_lddt: 0.0
             experimentally_resolved: 0.0
             plddt: 0.0
+            pae: 0.0
             pde: 0.0
 
   validation:

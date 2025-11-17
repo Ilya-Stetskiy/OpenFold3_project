@@ -75,6 +75,7 @@ dataset_configs:
           loss_weights:
             experimentally_resolved: 0.0
             plddt: 0.0
+            pae: 0.0
             pde: 0.0
 
     short-monomer-distillation:
@@ -96,6 +97,7 @@ dataset_configs:
           loss_weights:
             experimentally_resolved: 0.0
             plddt: 0.0
+            pae: 0.0
             pde: 0.0
 
     disordered-pdb:
@@ -117,6 +119,7 @@ dataset_configs:
           loss_weights:
             experimentally_resolved: 0.0
             plddt: 0.0
+            pae: 0.0
             pde: 0.0
 
   validation:

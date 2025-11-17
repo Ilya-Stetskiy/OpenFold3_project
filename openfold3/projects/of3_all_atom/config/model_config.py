@@ -38,7 +38,7 @@ n_key = mlc.FieldReference(128, field_type=int)
 
 # Model components
 train_confidence_only = mlc.FieldReference(False, field_type=bool)
-pae_head_enabled = mlc.FieldReference(False, field_type=bool)
+pae_head_enabled = mlc.FieldReference(True, field_type=bool)
 
 eps = mlc.FieldReference(1e-8, field_type=float)
 inf = mlc.FieldReference(1e9, field_type=float)
