@@ -23,6 +23,8 @@ metrics for logging.
 
 from itertools import combinations_with_replacement
 
+from torchmetrics import MeanMetric, PearsonCorrCoef
+
 from openfold3.core.data.resources.lists import (
     AB_AG_CHAIN_PAIR_TYPES,
     AB_AG_CHAIN_TYPES,
@@ -197,3 +199,8 @@ METRICS_MINIMIZE = [
     "drmsd",
     "rmsd",
 ]
+
+METRIC_DENOMINATOR_ATTRS = {
+    MeanMetric: "weight",
+    PearsonCorrCoef: "n_total",
+}

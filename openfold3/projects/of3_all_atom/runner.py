@@ -47,6 +47,7 @@ from openfold3.projects.of3_all_atom.config.model_config import (
 )
 from openfold3.projects.of3_all_atom.constants import (
     CORRELATION_METRICS,
+    METRIC_DENOMINATOR_ATTRS,
     TRAIN_LOGGED_METRICS,
     TRAIN_LOSSES,
     VAL_LOGGED_METRICS,
@@ -673,32 +674,43 @@ class OpenFold3AllAtom(ModelRunner):
         """
         if not self.trainer.sanity_checking:
             # Sync and reduce metrics across ranks
-            # Only log metrics that have been updated
             metrics_output = metrics.compute()
-            if self.per_sample_grad_clipping:
-                # After compute() sync, metrics[name].weight is the total
-                # number of samples for a given metric across all ranks
-                enabled_metrics = {
-                    name: result
-                    for name, result in metrics_output.items()
-                    if self.metric_enabled.get(name) and metrics[name].weight.item() > 0
-                }
-                if self.logger is not None:
-                    self.logger.log_metrics(enabled_metrics, step=self.global_step)
+
+            # Only log metrics that have been updated
+            enabled_metrics = {}
+            for name, result in metrics_output.items():
+                if not self.metric_enabled.get(name):
+                    continue
+
+                metric_obj = metrics[name]
+                metric_type = type(metric_obj)
+
+                # Get the sample count attribute name (e.g., 'weight')
+                attr_name = METRIC_DENOMINATOR_ATTRS.get(metric_type)
+
+                if attr_name is None:
+                    raise NotImplementedError(
+                        f"Failed to get sample count for metric type "
+                        f"'{metric_type.__name__}'. Please add this metric "
+                        f"to the METRIC_DENOMINATOR_ATTRS constant."
+                    )
+
+                n_samples = getattr(metric_obj, attr_name).item()
+                if n_samples > 0:
+                    enabled_metrics[name] = result
+
+            if self.per_sample_grad_clipping and self.logger is not None:
+                self.logger.log_metrics(enabled_metrics, step=self.global_step)
             else:
-                for name, result in metrics_output.items():
-                    if (
-                        self.metric_enabled.get(name)
-                        and metrics[name].weight.item() > 0
-                    ):
-                        self.log(
-                            name,
-                            result,
-                            on_step=False,
-                            on_epoch=True,
-                            logger=True,
-                            sync_dist=False,  # Already synced in compute()
-                        )
+                for name, result in enabled_metrics.items():
+                    self.log(
+                        name,
+                        result,
+                        on_step=False,
+                        on_epoch=True,
+                        logger=True,
+                        sync_dist=False,  # Already synced in compute()
+                    )
 
             if compute_model_selection:
                 model_selection = compute_final_model_selection_metric(
