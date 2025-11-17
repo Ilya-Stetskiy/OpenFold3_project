@@ -102,42 +102,43 @@ def calculate_row_counts(
             n_rows_paired = next(
                 iter(msa_array_collection.chain_id_to_paired_msa.values())
             ).msa.shape[0]
-            n_rows_paired_cropped = min(max_rows_paired, n_rows_paired)
+            n_rows_paired_subsampled = min(max_rows_paired, n_rows_paired)
         else:
-            n_rows_paired_cropped = 0
+            n_rows_paired_subsampled = 0
 
         # Main MSA rows
-        n_rows_main = {
+        n_rows_main_subsampled = {
             k: v.msa.shape[0]
             for k, v in msa_array_collection.chain_id_to_main_msa.items()
         }
-        n_rows_main_max = max(n_rows_main.values())
+        n_rows_main_max = max(n_rows_main_subsampled.values())
 
         # Combine
-        n_rows = min([1 + n_rows_paired_cropped + n_rows_main_max, max_rows])
+        n_rows = min([1 + n_rows_paired_subsampled + n_rows_main_max, max_rows])
     else:
-        n_rows = 0
-        n_rows_paired_cropped = 0
-        n_rows_main = {}
+        n_rows = 1
+        n_rows_paired_subsampled = 0
+        n_rows_main_subsampled = {}
 
     msa_array_collection.set_state_prefeaturized(
         n_rows=n_rows,
-        n_rows_paired_cropped=n_rows_paired_cropped,
-        n_rows_main=n_rows_main,
+        n_rows_paired_subsampled=n_rows_paired_subsampled,
+        n_rows_main_subsampled=n_rows_main_subsampled,
     )
 
 
 @log_runtime_memory(
     runtime_dict_key="runtime-msa-feat-precursor-crop-vstack", multicall=True
 )
-def crop_vstack_msa_arrays(
+def vstack_pad_msa_arrays(
     msa_array_collection: MsaArrayCollection,
     chain_id: str,
 ) -> tuple[MsaArray, np.ndarray]:
-    """Crops and vertically stacks the MSA arrays for a chain.
+    """Vertically stacks the MSA arrays for a chain and pads to max MSA depth across
+    all chains.
 
-    Note: at this point the paired MSA is already cropped for all chains -
-    this function only crops the main MSA for a given chain.
+    Note: at this point the paired MSA is already cropped for all chains and the
+    main MSA is subsampled.
 
     Args:
         msa_array_collection (MsaArrayCollection):
@@ -149,26 +150,19 @@ def crop_vstack_msa_arrays(
         tuple[MsaArray, np.ndarray]:
             The vertically stacked MSA array and the mask for the MSA.
     """
-    # Query stays the same
+    # Query
     msa_array_vstack = msa_array_collection.chain_id_to_query_seq[chain_id]
 
-    # Paired MSA is cropped
-    if msa_array_collection.row_counts["n_rows_paired_cropped"] > 0:
-        msa_array_paired_cropped = msa_array_collection.chain_id_to_paired_msa[
-            chain_id
-        ].truncate(msa_array_collection.row_counts["n_rows_paired_cropped"])
+    # Paired MSA
+    if msa_array_collection.row_counts["n_rows_paired_subsampled"] > 0:
         msa_array_vstack = msa_array_vstack.concatenate(
-            msa_array_paired_cropped, axis=0
+            msa_array_collection.chain_id_to_paired_msa[chain_id], axis=0
         )
 
-    # This is where the BANDED subsampling logic will go optionally
-    # Main MSA is cropped
-    if len(msa_array_collection.row_counts["n_rows_main"]) > 0:
+    # Main MSA
+    if len(msa_array_collection.row_counts["n_rows_main_subsampled"]) > 0:
         msa_array_vstack = msa_array_vstack.concatenate(
-            msa_array_collection.chain_id_to_main_msa[chain_id].truncate(
-                msa_array_collection.row_counts["n_rows"]
-                - (msa_array_collection.row_counts["n_rows_paired_cropped"] + 1)
-            ),
+            msa_array_collection.chain_id_to_main_msa[chain_id],
             axis=0,
         )
 
@@ -304,7 +298,8 @@ def create_msa_feature_precursor_of3(
             deletion_matrix=np.zeros(
                 [msa_array_collection.row_counts["n_rows"], n_tokens]
             ),
-            n_rows_paired=msa_array_collection.row_counts["n_rows_paired_cropped"] + 1,
+            n_rows_paired=msa_array_collection.row_counts["n_rows_paired_subsampled"]
+            + 1,
             msa_mask=np.ones([msa_array_collection.row_counts["n_rows"], n_tokens]),
             msa_profile=np.zeros([n_tokens, len(STANDARD_RESIDUES_WITH_GAP_1)]),
             deletion_mean=np.zeros(n_tokens),
@@ -313,7 +308,7 @@ def create_msa_feature_precursor_of3(
         # Process each chain
         for chain_id in msa_array_collection.chain_id_to_rep_id:
             # Crop and vertically stack query, paired MSA and main MSA arrays
-            msa_array_vstack, _ = crop_vstack_msa_arrays(
+            msa_array_vstack, _ = vstack_pad_msa_arrays(
                 msa_array_collection,
                 chain_id,
             )

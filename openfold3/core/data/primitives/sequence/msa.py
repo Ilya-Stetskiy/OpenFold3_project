@@ -25,7 +25,6 @@ from functools import partial
 
 import numpy as np
 import pandas as pd
-import torch
 from numpy.random import Generator, default_rng
 
 from openfold3.core.data.primitives.quality_control.logging_utils import (
@@ -480,7 +479,8 @@ class MsaArrayCollection:
         row_counts (dict[str, int | dict[str, int]]):
             Dictionary containing the number of total number of rows in the horizontally
             concatenated MSA capped to max_rows, the number of paired MSA rows after
-            cropping and the representative id to number of main MSA rows.
+            subsampling and the representative id to number of main MSA rows after
+            subsampling.
     """
 
     # Core attributes
@@ -548,13 +548,15 @@ class MsaArrayCollection:
         self.rep_id_to_paired_msa = {}
         self.rep_id_to_main_msa = {}
 
-    def set_state_prefeaturized(self, n_rows, n_rows_paired_cropped, n_rows_main):
+    def set_state_prefeaturized(
+        self, n_rows, n_rows_paired_subsampled, n_rows_main_subsampled
+    ):
         """Set the state to prefeaturized."""
         self._state = "prefeaturized"
         self.row_counts = {
             "n_rows": n_rows,
-            "n_rows_paired_cropped": n_rows_paired_cropped,
-            "n_rows_main": n_rows_main,
+            "n_rows_paired_subsampled": n_rows_paired_subsampled,
+            "n_rows_main_subsampled": n_rows_main_subsampled,
         }
 
 
@@ -1341,7 +1343,7 @@ def create_main(
     """
 
     if generator is None:
-        seed = random.randint(0, torch.iinfo(torch.int32).max)
+        seed = random.randint(0, np.iinfo(np.int32).max)
         generator = default_rng(seed=seed)
 
     # Iterate over representatives
