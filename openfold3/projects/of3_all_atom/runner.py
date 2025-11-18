@@ -665,6 +665,8 @@ class OpenFold3AllAtom(ModelRunner):
         """
         if not self.trainer.sanity_checking:
             # Sync and reduce metrics across ranks
+            # Done separately from compute() to get the sample counts
+            # so that only enabled metrics are logged
             for metric in metrics.values():
                 metric.sync()
                 metric._should_unsync = False
@@ -688,9 +690,8 @@ class OpenFold3AllAtom(ModelRunner):
                     )
 
                 n_samples = getattr(metric_obj, attr_name).sum().item()
-
                 if n_samples > 0:
-                    enabled_metrics[name] = result.mean()
+                    enabled_metrics[name] = result
 
             if self.per_sample_grad_clipping and self.logger is not None:
                 self.logger.log_metrics(enabled_metrics, step=self.global_step)
@@ -707,7 +708,7 @@ class OpenFold3AllAtom(ModelRunner):
 
             if compute_model_selection:
                 model_selection = compute_final_model_selection_metric(
-                    metrics=enabled_metrics,
+                    metrics=metrics_output,
                     model_selection_weights=self.model_selection_weights,
                 )
 
