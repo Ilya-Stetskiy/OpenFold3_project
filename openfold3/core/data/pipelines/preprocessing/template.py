@@ -2080,6 +2080,7 @@ class TemplatePrecachePreprocessor:
         self,
         config: TemplatePreprocessorSettings,
     ) -> None:
+        self.moltypes = config.moltypes
         self.n_processes = config.n_processes
         self.chunksize = config.chunksize
 
@@ -2140,6 +2141,7 @@ class TemplatePrecachePreprocessor:
         try:
             precache_entry_file = self.precache_directory / f"{template_entry_id}.npz"
             if precache_entry_file.exists():
+                print(f"Precache entry {template_entry_id} already exists, skipping.")
                 return
 
             cif_file = _load_ciffile(
@@ -2152,12 +2154,38 @@ class TemplatePrecachePreprocessor:
             )
 
             if self.structure_array_directory is not None:
-                for chain_id in chain_id_seq_map:
-                    structure_array_path = (
-                        self.structure_array_directory
-                        / template_entry_id
-                        / f"{template_entry_id}_{chain_id}.npz"
+                chain_id_to_mol_type_path = (
+                    self.structure_array_directory
+                    / f"{template_entry_id}/chain_id_to_moltype.npz"
+                )
+                # If no chain-id -> moltype map = no template structure for any chains
+                # in the complex
+                if not chain_id_to_mol_type_path.exists():
+                    print(
+                        f"No chain ID - moltype map for {template_entry_id}. Skipping."
                     )
+                    return
+                else:
+                    chain_id_to_mol_type = np.load(
+                        chain_id_to_mol_type_path, allow_pickle=True
+                    )["chain_id_to_mol_type"].item()
+
+                for chain_id in chain_id_seq_map:
+                    chain_mol_type = (
+                        MoleculeType(chain_id_to_mol_type[chain_id])
+                        if chain_id in chain_id_to_mol_type
+                        else None
+                    )
+                    # Skip chains with missing moltypes or ones we don't need to
+                    # precache data for
+                    if chain_mol_type is None or chain_mol_type not in self.moltypes:
+                        continue
+                    else:
+                        structure_array_path = (
+                            self.structure_array_directory
+                            / template_entry_id
+                            / f"{template_entry_id}_{chain_id}.npz"
+                        )
                     # Skip precache computation if a chain is missing
                     if not structure_array_path.exists():
                         raise FileNotFoundError(
@@ -2385,6 +2413,7 @@ def preprocess_template_structure_for_template(
 
     # Save template structure for each chain separately
     chain_ids = np.unique(atom_array.chain_id)
+    chain_id_to_mol_type = {}
     for chain_id in chain_ids:
         # Find molecule type of chain and save if included
         atom_array_chain = atom_array[atom_array.chain_id == chain_id]
@@ -2394,7 +2423,9 @@ def preprocess_template_structure_for_template(
                 f"Multiple molecule types found in chain {chain_id} of "
                 f"template {template_structure_file.stem}."
             )
-        if chain_mol_type[0] in moltypes:
+        chain_mol_type = chain_mol_type[0]
+        if chain_mol_type in moltypes:
+            chain_id_to_mol_type[chain_id] = chain_mol_type
             if not template_structure_array_subdirectory.exists():
                 os.makedirs(template_structure_array_subdirectory)
             write_atomarray_to_npz(
@@ -2402,4 +2433,10 @@ def preprocess_template_structure_for_template(
                 output_file=template_structure_array_subdirectory
                 / f"{template_structure_file.stem}_{chain_id}.npz",
             )
+
+    if len(chain_id_to_mol_type) > 0:
+        np.savez_compressed(
+            template_structure_array_subdirectory / "chain_id_to_moltype.npz",
+            **{"chain_id_to_mol_type": chain_id_to_mol_type},
+        )
     return cif_file, atom_array
