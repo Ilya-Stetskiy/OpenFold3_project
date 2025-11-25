@@ -17,20 +17,16 @@ import logging
 import random
 import traceback
 
-import pandas as pd
 import torch
 
 from openfold3.core.data.framework.single_datasets.abstract_single import (
     register_dataset,
 )
-from openfold3.core.data.framework.single_datasets.base_of3 import (
-    BaseOF3Dataset,
+from openfold3.core.data.framework.single_datasets.dataset_utils import (
+    check_invalid_feature_dict,
 )
 from openfold3.core.data.framework.single_datasets.monomer import (
     MonomerDataset,
-)
-from openfold3.core.data.framework.single_datasets.dataset_utils import (
-    check_invalid_feature_dict,
 )
 
 logger = logging.getLogger(__name__)
@@ -50,7 +46,7 @@ class RNAMonomerDataset(MonomerDataset):
 
         # All samples are RNA
         self.single_moltype = "RNA"
-    
+
     def __getitem__(
         self, index: int
     ) -> dict[str : torch.Tensor | dict[str, torch.Tensor]]:
