@@ -202,7 +202,7 @@ def sample_templates(
     if take_top_k:
         k = np.min([l, n_templates])
     else:
-        k = np.min([np.random.randint(0, l), n_templates])
+        k = np.min([np.random.randint(0, l + 1), n_templates])
 
     if k > 0:
         # Load template cache entry numpy file

@@ -189,7 +189,7 @@ def create_template_restype(
         get_with_unknown_3_to_idx(res_names), dtype=torch.int64
     )
     template_restype = encode_one_hot(restype_index, len(STANDARD_RESIDUES_WITH_GAP_3))
-    return (template_restype * template_pseudo_beta_mask.unsqueeze(-1)).to(torch.int32)
+    return template_restype.to(torch.int32)
 
 
 def create_template_distogram(

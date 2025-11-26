@@ -58,6 +58,7 @@ class MsaSampleProcessor:
             create_main,
             max_rows=config.max_rows,
             aln_order=config.aln_order,
+            subsample_main=config.subsample_main,
             keep_subsampled_order=config.keep_subsampled_order,
         )
 
