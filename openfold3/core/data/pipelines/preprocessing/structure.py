@@ -53,6 +53,7 @@ from openfold3.core.data.io.structure.mol import write_annotated_sdf
 from openfold3.core.data.io.structure.pdb import (
     parse_pdb_af2,
     parse_protein_monomer_pdb_tmp,
+    parse_RNA_monomer_pdb_tmp,
 )
 from openfold3.core.data.io.utils import encode_numpy_types
 from openfold3.core.data.pipelines.preprocessing.utils import SharedSet
@@ -62,6 +63,7 @@ from openfold3.core.data.primitives.caches.format import (
     PreprocessingDataCache,
     PreprocessingStructureData,
     ProteinMonomerDatasetCache,
+    RNAMonomerDatasetCache,
 )
 from openfold3.core.data.primitives.structure.alignment import (
     calculate_distance_clash_map,
@@ -887,6 +889,51 @@ def preparse_monomer(
     write_structure(atom_array, output_dir / f"{entry_id}/{entry_id}.pkl")
 
 
+# TODO: combine local and S3 monomer preparsing
+def preparse_RNA_monomer(
+    entry_id: str,
+    data_directory: Path,
+    structure_filename: str,
+    structure_file_format: str,
+    output_dir: Path,
+):
+    ### to reduce run times only parse if the file does not exist
+    output_file = output_dir / f"{entry_id}/structure.npz"
+    if output_file.exists():
+        return
+    _, atom_array = parse_RNA_monomer_pdb_tmp(
+        data_directory / entry_id / f"{entry_id}.{structure_file_format}"
+    )
+    write_structure(atom_array, output_dir / f"{entry_id}/structure.npz")
+
+
+class _RNAMonomerPreprocessingWrapper:
+    def __init__(
+        self,
+        data_directory: Path,
+        structure_filename: str,
+        structure_file_format: str,
+        output_dir: Path,
+    ) -> None:
+        """Wrapper class for pre-parsing protein mononer files into .pkl."""
+        self.data_directory = data_directory
+        self.structure_filename = structure_filename
+        self.structure_file_format = structure_file_format
+        self.output_dir = output_dir
+
+    def __call__(self, entry_id: str) -> None:
+        try:
+            preparse_RNA_monomer(
+                entry_id,
+                self.data_directory,
+                self.structure_filename,
+                self.structure_file_format,
+                self.output_dir,
+            )
+        except Exception as e:
+            print(f"Failed to preparse monomer {entry_id}:\n{e}\n")
+
+
 class _ProteinMonomerPreprocessingWrapper:
     def __init__(
         self,
@@ -912,6 +959,43 @@ class _ProteinMonomerPreprocessingWrapper:
             )
         except Exception as e:
             print(f"Failed to preparse monomer {entry_id}:\n{e}\n")
+
+
+def preparse_RNA_monomer_structures(
+    dataset_cache: RNAMonomerDatasetCache,
+    data_directory: Path,
+    structure_filename: str,
+    structure_file_format: str,
+    output_dir: Path,
+    num_workers: int,
+    chunksize: int,
+):
+    # Create per-chain directories
+    entry_ids = list(dataset_cache.structure_data.keys())
+    output_dir = output_dir / "structure_files"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    for entry_id in tqdm(
+        entry_ids, total=len(entry_ids), desc="1/2: Creating output directories"
+    ):
+        entry_dir = output_dir / f"{entry_id}"
+        if not entry_dir.exists():
+            entry_dir.mkdir(parents=True, exist_ok=True)
+
+    wrapped_monomer_preparser = _RNAMonomerPreprocessingWrapper(
+        data_directory, structure_filename, structure_file_format, output_dir
+    )
+
+    with mp.Pool(num_workers) as pool:
+        for _ in tqdm(
+            pool.imap_unordered(
+                wrapped_monomer_preparser,
+                entry_ids,
+                chunksize=chunksize,
+            ),
+            total=len(entry_ids),
+            desc="2/2: Pre-parsing monomer structures",
+        ):
+            pass
 
 
 def preparse_protein_monomer_structures(

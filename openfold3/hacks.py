@@ -7,8 +7,8 @@ PLACEHOLDER_PATH = "placeholder"
 
 def prep_deepspeed():
     # deepspeed requires the envvar set, but doesn't care about value
-    if not os.environ["CUTLASS_PATH"]:
-        os.environ["CUTLASS_PATH"] = os.environ.get("CUTLASS_PATH", PLACEHOLDER_PATH)
+    # if already set (i.e. local cutlass setup), retain existing value
+    os.environ["CUTLASS_PATH"] = os.environ.get("CUTLASS_PATH", PLACEHOLDER_PATH)
 
 
 def prep_cutlass():
