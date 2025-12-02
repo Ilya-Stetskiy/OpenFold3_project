@@ -79,9 +79,6 @@ class BaseOF3Dataset(SingleDataset, ABC):
     - implement the __getitem__ method
     - implement the datapoint_cache property and
     - decorate the class with the register_dataset decorator.
-
-    In addition, child classes of BaseAF3Dataset must set whether cropping is performed
-    by setting the self.apply_crop attribute.
     """
 
     # TODO: add typehint - currently causes circular import issues
@@ -170,21 +167,13 @@ class BaseOF3Dataset(SingleDataset, ABC):
         # Dataset configuration
         # n_tokens can be set in the getitem method separately for each sample using
         # the output of create_target_structure_features
-        self.apply_crop = None
-        self.crop = {}
+        self.crop = dataset_config.crop.model_dump()
         self.loss = dataset_config.loss.model_dump()
         self.template = dataset_config.template
 
         # Misc
         self.single_moltype = None
         self.debug_mode = dataset_config.debug_mode
-
-    def __post_init__(self):
-        if self.apply_crop is None:
-            raise ValueError(
-                "Attribute self.apply_crop must be set in the __init__ of"
-                f"{self.get_class_name()}."
-            )
 
     @log_runtime_memory(runtime_dict_key="runtime-create-structure-features")
     def create_structure_features(
@@ -200,7 +189,6 @@ class BaseOF3Dataset(SingleDataset, ABC):
         atom_array_gt, crop_strategy, self.n_tokens = process_target_structure_of3(
             target_structures_directory=self.target_structures_directory,
             pdb_id=pdb_id,
-            apply_crop=self.apply_crop,
             crop_config=self.crop,
             preferred_chain_or_interface=preferred_chain_or_interface,
             structure_format=self.target_structure_file_format,

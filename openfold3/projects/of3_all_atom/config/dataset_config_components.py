@@ -131,7 +131,17 @@ class CropWeights(BaseModel):
     spatial_interface: float = 0.4
 
 
+class TokenCropSettings(BaseModel):
+    """Settings for "standard" token-wise cropping."""
+
+    enabled: bool = True
+    token_budget: int = 384
+    crop_weights: CropWeights = CropWeights()
+
+
 class ChainCropSettings(BaseModel):
+    """Settings for chain-wise "pre-cropping" that limits the max. number of chains."""
+
     enabled: bool = False
     n_chains: int = 20
     interface_distance_threshold: float = 15.0
@@ -141,8 +151,7 @@ class ChainCropSettings(BaseModel):
 class CropSettings(BaseModel):
     """Settings for crop featurization."""
 
-    token_budget: int = 384
-    crop_weights: CropWeights = CropWeights()
+    token_crop: TokenCropSettings = TokenCropSettings()
     chain_crop: ChainCropSettings = ChainCropSettings()
 
 

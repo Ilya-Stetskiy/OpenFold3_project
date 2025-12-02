@@ -183,8 +183,6 @@ class WeightedPDBDataset(BaseOF3Dataset):
         super().__init__(dataset_config)
 
         # Dataset configuration
-        self.apply_crop = True
-        self.crop = dataset_config.crop.model_dump()
         self.sample_weights = dataset_config.sample_weights
 
         # Datapoint cache

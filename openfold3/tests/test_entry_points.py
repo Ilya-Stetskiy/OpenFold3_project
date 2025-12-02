@@ -89,7 +89,11 @@ class TestTrainingExperiment:
                         config:
                             debug_mode: true
                             crop:
-                                token_budget: 640 
+                                token_crop:
+                                    token_budget: 640 
+                                chain_crop:
+                                    enabled: true
+                                    n_chains: 25
                             loss:
                                 bond: 4.0
                                 smooth_lddt: 0.0
@@ -172,7 +176,9 @@ class TestTrainingExperiment:
 
         weighted_pdb_spec = expt_runner.data_module_config.datasets[0]
         assert weighted_pdb_spec.weight == 1
-        assert weighted_pdb_spec.config.crop.token_budget == 640
+        assert weighted_pdb_spec.config.crop.token_crop.token_budget == 640
+        assert weighted_pdb_spec.config.crop.chain_crop.enabled is True
+        assert weighted_pdb_spec.config.crop.chain_crop.n_chains == 25
 
     @pytest.mark.parametrize("pl_checkpoint_option", [None, "last", "hpc", "registry"])
     def test_pl_checkpoint_load_options(self, pl_checkpoint_option):

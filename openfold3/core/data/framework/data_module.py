@@ -320,18 +320,20 @@ class DataModule(pl.LightningDataModule):
 
         # Check if provided crop weights sum to 1
         for idx, config_i in enumerate(train_dataset_config.configs):
-            config_i_crop_weights = config_i.crop.crop_weights.model_dump()
+            config_i_crop_weights = config_i.crop.token_crop.crop_weights.model_dump()
             if sum(config_i_crop_weights.values()) != 1:
                 warnings.warn(
                     f"Dataset {train_dataset_config.classes[idx]} crop weights do not "
                     "sum to 1. Normalizing weights.",
                     stacklevel=2,
                 )
-                train_dataset_config.configs[idx].crop.crop_weights = {
+                train_dataset_config.configs[idx].crop.token_crop.crop_weights = {
                     key: value / sum(config_i_crop_weights.values())
                     for key, value in config_i_crop_weights.items()
                 }
-                print(f"{train_dataset_config.configs[idx].crop.crop_weights=}")
+                print(
+                    f"{train_dataset_config.configs[idx].crop.token_crop.crop_weights=}"
+                )
 
     @classmethod
     def run_checks(cls, multi_dataset_config: MultiDatasetConfig) -> None:

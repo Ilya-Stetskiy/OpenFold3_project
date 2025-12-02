@@ -54,7 +54,6 @@ class ProcessedTargetStructure(NamedTuple):
 def process_target_structure_of3(
     target_structures_directory: Path,
     pdb_id: str,
-    apply_crop: bool,
     crop_config: dict,
     preferred_chain_or_interface: str | list[str, str] | None,
     structure_format: Literal["pkl", "npz"],
@@ -68,12 +67,9 @@ def process_target_structure_of3(
             Path to the directory containing the directories of target structure files.
         pdb_id (str):
             PDB ID of the target structure.
-        apply_crop (bool):
-            Whether to apply cropping.
         crop_config (dict):
-            Crop configuration dictionary, containing the following keys:
-            - token_budget (int): Number of tokens to sample.
-            - crop_weights (dict): Weights of different crop strategies.
+            Crop configuration dictionary (see CropSettings in
+            dataset_config_components.py).
         preferred_chain_or_interface (str | list[str, str] | None):
             Sampled preferred chain or interface to sample the crop around.
         structure_format (Literal["pkl", "npz"]):
@@ -83,14 +79,14 @@ def process_target_structure_of3(
             Metadata for each chain in the target structure, obtained from the dataset
             cache.
         use_roda_monomer_format (bool):
-            Whether input filepath is expected to be in the s3 RODA monomer
-            format: <struc_dir>/<mgy_id>/structure.npz
+            Whether input filepath is expected to be in the s3 RODA monomer format:
+            <struc_dir>/<mgy_id>/structure.npz
 
     Returns:
         ProcessedTargetStructure:
             A NamedTuple containing the full AtomArray, the crop strategy, and the
-            number of tokens in the full AtomArray if apply_crop is False or the slice
-            of the AtomArray with crop_mask=True if apply_crop is True.
+            number of tokens in the full AtomArray if token cropping is disabled or the
+            slice of the AtomArray with crop_mask=True if it is enabled.
     """
     # Parse target structure
     atom_array = parse_target_structure(
@@ -109,15 +105,15 @@ def process_target_structure_of3(
     # Apply optional pre-cropping and main cropping (setting crop_mask attribute)
     atom_array, crop_strategy = crop_chainwise_and_set_crop_mask(
         atom_array=atom_array,
-        apply_crop=apply_crop,
         crop_config=crop_config,
         preferred_chain_or_interface=preferred_chain_or_interface,
     )
 
     # The number of tokens is used in downstream parts of the data pipeline
     # if cropping was done, we want to set the number of tokens to the token budget
-    if apply_crop:
-        n_tokens = crop_config["token_budget"]
+    token_crop_settings = crop_config["token_crop"]
+    if token_crop_settings["enabled"]:
+        n_tokens = token_crop_settings["token_budget"]
     else:
         n_tokens = np.unique(atom_array.token_id).shape[0]
 

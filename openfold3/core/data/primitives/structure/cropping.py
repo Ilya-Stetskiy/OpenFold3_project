@@ -597,7 +597,6 @@ class CroppingOutput(NamedTuple):
 
 def crop_chainwise_and_set_crop_mask(
     atom_array: AtomArray,
-    apply_crop: bool,
     crop_config: dict,
     preferred_chain_or_interface: str | list[str, str] | None = None,
 ) -> CroppingOutput:
@@ -613,8 +612,6 @@ def crop_chainwise_and_set_crop_mask(
     Args:
         atom_array (AtomArray):
             AtomArray of the input assembly to crop.
-        apply_crop (bool):
-            Whether to apply standard cropping.
         crop_config (dict):
             Configuration dictionary of crop settings. Refer to
             openfold3.projects.of3_all_atom.config.dataset_config_components.CropSettings
@@ -630,6 +627,7 @@ def crop_chainwise_and_set_crop_mask(
             crop_mask annotation set, and the crop strategy that was applied.
     """
     chain_crop_settings = crop_config["chain_crop"]
+    token_crop_settings = crop_config["token_crop"]
 
     # 1) Apply chain-wise "pre-cropping" if enabled
     if chain_crop_settings["enabled"]:
@@ -645,11 +643,11 @@ def crop_chainwise_and_set_crop_mask(
 
     # 2) Sample and apply "standard" cropping strategy if enabled, setting the crop_mask
     #    attribute of the AtomArray
-    if apply_crop:
+    if token_crop_settings["enabled"]:
         crop_strategy = sample_crop_strategy_and_set_mask(
             atom_array=atom_array,
-            token_budget=crop_config["token_budget"],
-            crop_weights=crop_config["crop_weights"],
+            token_budget=token_crop_settings["token_budget"],
+            crop_weights=token_crop_settings["crop_weights"],
             preferred_chain_or_interface=preferred_chain_or_interface,
         )
     else:

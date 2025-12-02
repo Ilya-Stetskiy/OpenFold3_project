@@ -72,11 +72,13 @@ dataset_configs:
           n_templates: 4
           take_top_k: false
         crop:
-          token_budget: 768
-          crop_weights:
-            contiguous: 0.2
-            spatial: 0.4
-            spatial_interface: 0.4
+          token_crop:
+            enabled: true
+            token_budget: 768
+            crop_weights:
+              contiguous: 0.2
+              spatial: 0.4
+              spatial_interface: 0.4
           chain_crop:
             enabled: true
             n_chains: 50
@@ -95,6 +97,9 @@ dataset_configs:
         template:
           n_templates: 4
           take_top_k: true
+        crop:
+          token_crop:
+            enabled: false
 
 dataset_paths:
   weighted-pdb:
@@ -108,7 +113,7 @@ dataset_paths:
     template_cache_directory: /path/ 
     template_structure_array_directory: /path/ 
     template_structures_directory: none
-    template_file_format: pkl
+    template_file_format: npz
     ccd_file: /path 
 
   val-weighted-pdb:
@@ -122,5 +127,5 @@ dataset_paths:
     template_cache_directory: /path/ 
     template_structure_array_directory: /path/ 
     template_structures_directory: none
-    template_file_format: pkl
+    template_file_format: npz
     ccd_file: /path

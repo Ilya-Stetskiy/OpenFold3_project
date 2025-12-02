@@ -47,10 +47,13 @@ from openfold3.core.data.pipelines.preprocessing.template import (
     TemplatePreprocessorSettings,
 )
 from openfold3.projects.of3_all_atom.config.dataset_config_components import (
+    ChainCropSettings,
     CropSettings,
+    CropWeights,
     LossConfig,
     MSASettings,
     TemplateSettings,
+    TokenCropSettings,
 )
 from openfold3.projects.of3_all_atom.config.inference_query_format import (
     InferenceQuerySet,
@@ -132,6 +135,7 @@ class DefaultDatasetConfigSection(BaseModel):
     dataset_paths: TrainingDatasetPaths
     msa: MSASettings = MSASettings()
     template: TemplateSettings = TemplateSettings()
+    crop: CropSettings = CropSettings()
     loss: LossConfig = LossConfig()
 
 
@@ -170,7 +174,9 @@ def register_dataset_config(name: str) -> None:
 
 @register_dataset_config("WeightedPDBDataset")
 class WeightedPDBConfig(DefaultDatasetConfigSection):
-    crop: CropSettings = CropSettings()
+    crop: CropSettings = CropSettings(
+        chain_crop=ChainCropSettings(enabled=True),
+    )
     sample_weights: dict = {
         "a_prot": 3.0,
         "a_nuc": 3.0,
@@ -184,11 +190,13 @@ class WeightedPDBConfig(DefaultDatasetConfigSection):
 class ProteinMonomerConfig(DefaultDatasetConfigSection):
     sample_in_order: bool = True
     crop: CropSettings = CropSettings(
-        crop_weights={
-            "contiguous": 0.25,
-            "spatial": 0.75,
-            "spatial_interface": 0.0,
-        }
+        token_crop=TokenCropSettings(
+            crop_weights=CropWeights(
+                contiguous=0.25,
+                spatial=0.75,
+                spatial_interface=0.0,
+            )
+        )
     )
     loss: LossConfig = LossConfig(
         loss_weights={
@@ -209,11 +217,13 @@ class ProteinMonomerConfig(DefaultDatasetConfigSection):
 class RNAMonomerConfig(DefaultDatasetConfigSection):
     sample_in_order: bool = False
     crop: CropSettings = CropSettings(
-        crop_weights={
-            "contiguous": 0.25,
-            "spatial": 0.75,
-            "spatial_interface": 0.0,
-        }
+        token_crop=TokenCropSettings(
+            crop_weights=CropWeights(
+                contiguous=0.25,
+                spatial=0.75,
+                spatial_interface=0.0,
+            )
+        )
     )
     loss: LossConfig = LossConfig(
         loss_weights={
@@ -232,6 +242,9 @@ class RNAMonomerConfig(DefaultDatasetConfigSection):
 
 @register_dataset_config("DisorderedPDBDataset")
 class DisorderedPDBConfig(DefaultDatasetConfigSection):
+    crop: CropSettings = CropSettings(
+        chain_crop=ChainCropSettings(enabled=True),
+    )
     sample_weights: dict = {
         "a_prot": 3.0,
         "a_nuc": 3.0,
@@ -239,7 +252,6 @@ class DisorderedPDBConfig(DefaultDatasetConfigSection):
         "w_chain": 0.5,
         "w_interface": 1.0,
     }
-    crop: CropSettings = CropSettings()
     disable_non_protein_diffusion_weights: bool = True
     loss: LossConfig = LossConfig(
         loss_weights={
@@ -258,6 +270,7 @@ class DisorderedPDBConfig(DefaultDatasetConfigSection):
 
 @register_dataset_config("ValidationPDBDataset")
 class ValidationPDBConfig(DefaultDatasetConfigSection):
+    crop: CropSettings = CropSettings(token_crop=TokenCropSettings(enabled=False))
     template: TemplateSettings = TemplateSettings(take_top_k=True)
 
 

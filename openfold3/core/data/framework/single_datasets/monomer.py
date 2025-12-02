@@ -49,10 +49,6 @@ class MonomerDataset(BaseOF3Dataset):
         # Datapoint cache
         self.create_datapoint_cache()
 
-        # Dataset configuration
-        self.apply_crop = True
-        self.crop = dataset_config.crop.model_dump()
-
     def create_datapoint_cache(self):
         """Creates the datapoint_cache for uniform sampling.
 
