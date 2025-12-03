@@ -40,8 +40,13 @@ from pydantic import (
     model_validator,
 )
 from pydantic import ConfigDict as PydanticConfigDict
+from pydantic_core import PydanticUndefined
 
-from openfold3.core.config.config_utils import DirectoryPathOrNone, FilePathOrNone
+from openfold3.core.config.config_utils import (
+    DirectoryPathOrNone,
+    FilePathOrNone,
+    deep_update,
+)
 from openfold3.core.data.framework.data_module import DatasetMode, DatasetSpec
 from openfold3.core.data.pipelines.preprocessing.template import (
     TemplatePreprocessorSettings,
@@ -137,6 +142,36 @@ class DefaultDatasetConfigSection(BaseModel):
     template: TemplateSettings = TemplateSettings()
     crop: CropSettings = CropSettings()
     loss: LossConfig = LossConfig()
+
+    @model_validator(mode="before")
+    @classmethod
+    def merge_partial_update_with_defaults(cls, data: dict) -> dict:
+        """
+        Intercepts the user dataset config updates. If a field is provided in `data`
+        but the class also has a default set for it, merge the data into the default
+        instead of replacing it. This allows partial updates to nested config sections.
+        """
+        if not isinstance(data, dict):
+            return data
+
+        for field_name, field_info in cls.model_fields.items():
+            # Apply for nested updates
+            if field_name in data and isinstance(data[field_name], dict):
+                # Get default value
+                default_val = None
+                if field_info.default_factory is not None:
+                    default_val = field_info.default_factory()
+                elif field_info.default is not PydanticUndefined:
+                    default_val = field_info.default
+
+                if isinstance(default_val, BaseModel):
+                    default_dict = default_val.model_dump()
+
+                    # Merge and update default values with user provided data
+                    merged = deep_update(default_dict, data[field_name])
+                    data[field_name] = merged
+
+        return data
 
 
 class DatasetConfigRegistry:
