@@ -153,7 +153,7 @@ def create_template_feature_precursor_of3(
                 template_idx += 1
             except Exception as e:
                 tb = traceback.format_exc()
-                logger.debug(
+                logger.warning(
                     "-" * 40
                     + "\n"
                     + f"Skipping template with exception: {str(e)}\n"

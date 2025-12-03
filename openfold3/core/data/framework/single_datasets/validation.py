@@ -149,10 +149,11 @@ class ValidationPDBDataset(BaseOF3Dataset):
 
             except Exception as e:
                 tb = traceback.format_exc()
+                dataset_name = self.get_class_name()
                 logger.warning(
                     "-" * 40
                     + "\n"
-                    + f"Failed to process ValidationPDBDataset entry {pdb_id}:"
+                    + f"Failed to process {dataset_name} entry {pdb_id}:"
                     + f" {str(e)}\n"
                     + f"Exception type: {type(e).__name__}\nTraceback: {tb}"
                     + "-" * 40
