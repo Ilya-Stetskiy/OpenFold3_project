@@ -15,6 +15,7 @@
 """All operations for processing and manipulating metadata and training caches."""
 
 import functools
+import itertools
 import logging
 import random
 from collections import defaultdict
