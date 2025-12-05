@@ -46,7 +46,7 @@ def cross_validate_atomarray_msa(
 
     for chain_id in chain_ids:
         try:
-            rep_id = chain_to_rep[str(chain_id)]
+            rep_id = chain_to_rep.get(str(chain_id))
 
             if rep_id is None:
                 continue
