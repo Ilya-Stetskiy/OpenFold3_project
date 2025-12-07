@@ -131,6 +131,9 @@ F_NAME_ORDER = [
     "runtime-template-proc-sample",
     "runtime-template-proc-align",
     # 5th-level functions
+    "runtime-target-structure-proc-permutation-labels-mol-sym",
+    "runtime-target-structure-proc-permutation-labels-mol-sym-token",
+    "runtime-target-structure-proc-permutation-labels-mol-sym-component",
     "runtime-msa-proc-create-main-profile",
     "runtime-msa-feat-precursor-vstack",
     "runtime-msa-feat-precursor-create-token-mapper",
@@ -157,6 +160,9 @@ runtime-create-all-features
             runtime-target-structure-proc-token
             runtime-target-structure-proc-crop
             runtime-target-structure-proc-permutation-labels
+                runtime-target-structure-proc-permutation-labels-mol-sym
+                runtime-target-structure-proc-permutation-labels-mol-sym-token
+                runtime-target-structure-proc-permutation-labels-mol-sym-component
             runtime-target-structure-proc-unqual-atoms
         runtime-ref-conf-proc
             runtime-ref-conf-proc-fetch (* per reference conformer)

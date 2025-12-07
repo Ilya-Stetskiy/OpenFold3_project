@@ -300,6 +300,9 @@ class SymmetricMolGroup:
     n_symmetric_instances: int = 1
 
 
+@log_runtime_memory(
+    runtime_dict_key="runtime-target-structure-proc-permutation-labels-mol-sym"
+)
 def assign_mol_symmetry_ids(atom_array: AtomArray) -> AtomArray:
     """Assings molecular entity IDs and symmetry IDs to the atom array.
 
@@ -535,6 +538,9 @@ def mol_unique_instance_iter(
             yield entity[entity.mol_sym_id == sym_id]
 
 
+@log_runtime_memory(
+    runtime_dict_key="runtime-target-structure-proc-permutation-labels-mol-sym-token"
+)
 def assign_mol_sym_token_index(atom_array: AtomArray) -> None:
     """Assigns renumbered token indices for every molecule instance.
 
@@ -569,6 +575,9 @@ def assign_mol_sym_token_index(atom_array: AtomArray) -> None:
     assert np.all(atom_array.mol_sym_token_index != -1)
 
 
+@log_runtime_memory(
+    runtime_dict_key="runtime-target-structure-proc-permutation-labels-mol-sym-component"
+)
 def assign_mol_sym_component_ids(atom_array: AtomArray):
     """Assigns renumbered component IDs for every molecule instance.
 
