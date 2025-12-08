@@ -354,6 +354,13 @@ class OpenFold3(nn.Module):
             else self.shared.diffusion.no_full_rollout_samples
         )
 
+        # Determine whether to use zij trunk embedding in confidence heads
+        # Only enabled during training
+        if self.training:
+            use_trunk_embedding = random.random() < self.shared.use_confidence_emb_prob
+        else:
+            use_trunk_embedding = True
+
         # Compute atom positions
         with (
             torch.no_grad(),
@@ -366,6 +373,11 @@ class OpenFold3(nn.Module):
                 device=si_input.device,
             )
 
+            # If enabled, sync conditioning trunk rep dropout to match the embedding
+            # dropout in the confidence heads
+            use_conditioning = (
+                use_trunk_embedding if self.shared.sync_rollout_use_emb else True
+            )
             atom_positions_predicted = self.sample_diffusion(
                 batch=batch,
                 si_input=si_input,
@@ -373,7 +385,7 @@ class OpenFold3(nn.Module):
                 zij_trunk=zij_trunk,
                 noise_schedule=noise_schedule,
                 no_rollout_samples=no_rollout_samples,
-                use_conditioning=True,
+                use_conditioning=use_conditioning,
                 chunk_size=mode_mem_settings.chunk_size,
                 use_deepspeed_evo_attention=mode_mem_settings.use_deepspeed_evo_attention,
                 use_cueq_triangle_kernels=mode_mem_settings.use_cueq_triangle_kernels,
@@ -391,22 +403,13 @@ class OpenFold3(nn.Module):
 
         cast_dtype = torch.float32 if self.training else si_trunk.dtype
         with torch.amp.autocast(device_type="cuda", dtype=cast_dtype):
-            # Determine whether to use zij trunk embedding in confidence heads
-            # Only enabled during training
-            if self.training:
-                use_zij_trunk_embedding = (
-                    random.random() < self.shared.use_confidence_emb_prob
-                )
-            else:
-                use_zij_trunk_embedding = True
-
             # Compute confidence logits
             output.update(
                 self.aux_heads(
                     batch=batch,
                     si_input=si_input,
                     output=output,
-                    use_zij_trunk_embedding=use_zij_trunk_embedding,
+                    use_zij_trunk_embedding=use_trunk_embedding,
                     chunk_size=mode_mem_settings.chunk_size,
                     use_deepspeed_evo_attention=mode_mem_settings.use_deepspeed_evo_attention,
                     use_cueq_triangle_kernels=mode_mem_settings.use_cueq_triangle_kernels,
