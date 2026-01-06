@@ -171,6 +171,7 @@ class DataModule(pl.LightningDataModule):
         self.data_seed = data_module_config.data_seed
         self.epoch_len = data_module_config.epoch_len
         self.next_dataset_indices = {}
+        self.next_epoch = None
 
         # Parse datasets
         self.multi_dataset_config = self.parse_data_config(data_module_config.datasets)
@@ -453,7 +454,14 @@ class DataModule(pl.LightningDataModule):
             rank=self.global_rank,
             seed=self.data_seed,
         )
-        sampler.set_epoch(self.current_epoch)
+
+        # Need to set sampler epoch to the next when resuming training
+        if self.next_epoch is not None:
+            sampler.set_epoch(self.next_epoch)
+        # Otherwise current epoch, which should be 0 when starting from scratch
+        else:
+            sampler.set_epoch(self.current_epoch)
+
         return self.generate_dataloader(DatasetMode.train, sampler=sampler)
 
     def val_dataloader(self) -> DataLoader:
@@ -481,7 +489,8 @@ class DataModule(pl.LightningDataModule):
         return self.generate_dataloader(DatasetMode.prediction)
 
     def state_dict(self):
-        state = {"next_dataset_indices": self.next_dataset_indices}
+        state = {"next_dataset_indices": self.next_dataset_indices,
+                 "next_epoch": self.current_epoch + 1}
         logger.debug(f"Saving DataModule state dict: {state}")
         return state
 
@@ -498,8 +507,9 @@ class DataModule(pl.LightningDataModule):
                 f"Current {current_index_keys} Checkpoint {loaded_index_keys}"
             )
         self.next_dataset_indices = state_dict["next_dataset_indices"]
+        self.next_epoch = state_dict["next_epoch"]
 
-        logger.debug(f"Loaded DataModule state dict: {self.next_dataset_indices=}")
+        logger.debug(f"Loaded DataModule state dict: {state_dict}")
 
 
 class InferenceDataModule(DataModule):

@@ -54,7 +54,7 @@ from torch.utils.data.distributed import DistributedSampler
 from openfold3.core.data.framework.single_datasets.abstract_single import SingleDataset
 
 logger = logging.getLogger(__name__)
-
+logger.setLevel(logging.INFO)
 
 class SamplerDataset(Dataset):
     """
@@ -143,7 +143,7 @@ class OF3DistributedSampler(DistributedSampler):
                 Probabilities of sampling each dataset.
             epoch_len (int):
                 Number of datapoints to sample in total for each virtual epoch.
-            next_dataset_indices:
+            next_dataset_indices: dict[str, Any]
                 Record of last used indices for datasets that use in-order sampling
             num_replicas:
                 Number of processes participating in distributed training
@@ -291,6 +291,11 @@ class OF3DistributedSampler(DistributedSampler):
         # super().__iter__() yields the indices for this rank.
         # Use those indices to pick the correct tuples from the global list
         indices_for_this_rank = list(super().__iter__())
+
+        logger.debug(f"CALLED OF3DistributedSampler.__iter__ in rank {self.rank}: "
+        f"epoch {self.epoch}, seed {self.seed + self.epoch}, sampled dataset indices "
+        f"{dataset_indices.tolist()}, sampled datapoint indices "
+        f"{datapoint_indices.tolist()}, indices_for_this_rank {indices_for_this_rank}")
 
         for i in indices_for_this_rank:
             dataset_idx, datapoint_idx = global_pairs[i]
