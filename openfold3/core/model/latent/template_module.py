@@ -206,6 +206,7 @@ class TemplatePairBlock(PairBlock):
         single_templates = [t_i.unsqueeze(-4) for t_i in torch.unbind(t, dim=-4)]
         single_templates_masks = [m.unsqueeze(-3) for m in torch.unbind(mask, dim=-3)]
 
+        apply_ckpt = self.training and self.ckpt_per_template
         single_templ_fn = partial(
             self._forward_single_template,
             chunk_size=chunk_size,
@@ -221,14 +222,20 @@ class TemplatePairBlock(PairBlock):
             t_in = single_templates[i]
             mask_in = single_templates_masks[i]
 
+            if not inplace_safe and apply_ckpt:
+                t_in = t_in.contiguous()
+                mask_in = mask_in.contiguous()
+
             t_out = checkpoint_section(
                 single_templ_fn,
                 args=(t_in, mask_in),
-                apply_ckpt=self.training and self.ckpt_per_template,
+                apply_ckpt=apply_ckpt,
                 use_reentrant=self.use_reentrant,
             )
 
-            if not inplace_safe:
+            if inplace_safe:
+                t_in.copy_(t_out)
+            else:
                 single_templates[i] = t_out
 
         if not inplace_safe:
