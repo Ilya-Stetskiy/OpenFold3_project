@@ -174,8 +174,7 @@ class DataModule(pl.LightningDataModule):
         self.next_dataset_indices = {}
         # next_epoch is None to start with in the 1st epoch
         self.next_epoch = None
-        logger.debug(f"Seeding DataModule generator with {self.data_seed}")
-        self.generator = torch.Generator().manual_seed(self.data_seed)
+        self.generators = {}
 
         # Parse datasets
         self.multi_dataset_config = self.parse_data_config(data_module_config.datasets)
@@ -424,6 +423,10 @@ class DataModule(pl.LightningDataModule):
         else:
             num_workers = self.num_workers
 
+        logger.debug(f"Seeding DataModule {mode} generator with {self.data_seed}")
+        generator = torch.Generator().manual_seed(self.data_seed)
+        self.generators[mode] = generator
+
         # Base seed will be determined by self.generator (seeded by self.data_seed).
         # Model seeding uses the RankSpecificSeedCallback instead of
         # pl.seed_everything(workers=True), so this function is passed explicitly here.
@@ -435,7 +438,7 @@ class DataModule(pl.LightningDataModule):
             sampler=sampler,
             num_workers=num_workers,
             collate_fn=openfold_batch_collator,
-            generator=self.generator,
+            generator=self.generators[mode],
             worker_init_fn=worker_init_fn,
         )
 
