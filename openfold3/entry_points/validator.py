@@ -138,8 +138,6 @@ class DataModuleArgs(BaseModel):
     num_workers_validation: int = 4
     epoch_len: int = 4
 
-    prefetch_factor: int | None = None
-
 
 class PlTrainerArgs(BaseModel):
     """Arguments to configure pl.Trainer, including settings for number of devices."""
@@ -171,7 +169,7 @@ class PlTrainerArgs(BaseModel):
             warnings.warn(
                 "pl_trainer_args.use_distributed_sampler is set to False. "
                 "Note that this arg is currently being ignored as we always use "
-                "the OF3DistributedSampler.",
+                "the OF3DistributedSampler for training.",
                 stacklevel=2,
             )
         return self

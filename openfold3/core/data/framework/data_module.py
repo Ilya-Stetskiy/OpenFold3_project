@@ -351,7 +351,7 @@ class DataModule(pl.LightningDataModule):
         # Not necessary when running in isolation from pl.Trainer (i.e. unit tests)
         if self.trainer is not None:
             return self.trainer.global_rank
-        if dist.is_available():
+        if dist.is_available() and dist.is_initialized():
             return dist.get_rank()
         return 0
 
@@ -361,7 +361,7 @@ class DataModule(pl.LightningDataModule):
         # Not necessary when running in isolation from pl.Trainer (i.e. unit tests)
         if self.trainer is not None:
             return self.trainer.world_size
-        if dist.is_available():
+        if dist.is_available() and dist.is_initialized():
             return dist.get_world_size()
         return 1
 
@@ -420,9 +420,9 @@ class DataModule(pl.LightningDataModule):
         else:
             num_workers = self.num_workers
 
-        logger.debug(f"Seeding DataModule {mode} generator with {self.next_data_seed}")
         generator = self.generators.get(mode)
         if generator is None:
+            logger.info(f"Seeding DataModule {mode} generator with {self.next_data_seed}")
             generator = torch.Generator().manual_seed(self.next_data_seed)
             self.generators[mode] = generator
 

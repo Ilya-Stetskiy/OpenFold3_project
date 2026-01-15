@@ -60,7 +60,6 @@ if deepspeed_is_installed:
     import deepspeed
 
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
 # We define extra metrics that will cause this warning depending on the training stage
 # Only metrics with values present are logged, so we can ignore this error
 warnings.filterwarnings(

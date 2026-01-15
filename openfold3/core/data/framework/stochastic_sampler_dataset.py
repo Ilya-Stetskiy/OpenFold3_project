@@ -146,12 +146,6 @@ class OF3DistributedSampler(DistributedSampler):
             next_dataset_indices: dict[str, Any]
                 Record of last used indices for datasets that use in-order
                 sampling
-            epoch_len (int):
-                Number of datapoints to sample in total for each virtual epoch.
-            epoch_fetcher (Callable[[], int] | None):
-                Optional callable that returns the current epoch number. If
-                provided, this will be used to set the epoch instead of the
-                internal epoch counter.
             num_replicas:
                 Number of processes participating in distributed training
             rank:
