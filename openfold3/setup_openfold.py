@@ -41,7 +41,7 @@ logging.basicConfig(level=logging.INFO, format="%(message)s")
 logger = logging.getLogger(__name__)
 
 
-def setup_openfold_cache() -> tuple[Path, Path]:
+def setup_openfold_cache(use_conda) -> tuple[Path, Path]:
     """Set up the OpenFold cache directory."""
     logger.info("Setting up OpenFold cache directory...")
 
