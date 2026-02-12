@@ -649,7 +649,7 @@ def add_unresolved_atoms_within_residue(
                 - auth_asym_id
                 - auth_comp_id
                 - auth_seq_id
-                - sym_id 
+                - sym_id
                 - molecule_type_id
                 - entity_id
                 - _atom_idx

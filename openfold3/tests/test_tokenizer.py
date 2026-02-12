@@ -65,17 +65,27 @@ def test_tokenizer_integration(
 
 
 def test_tokenizer_unresolved_atoms_in_residues(biotite_ccd_wrapper):
-    test_cif_path =  Path(__file__).parent / "test_data" / "mmcifs" / "1kd8.cif"
-    test_cif_file, test_structure = parse_mmcif(test_cif_path, expand_bioassembly=True) 
+    test_cif_path = Path(__file__).parent / "test_data" / "mmcifs" / "1kd8.cif"
+    test_cif_file, test_structure = parse_mmcif(test_cif_path, expand_bioassembly=True)
 
-    resolved_array = add_unresolved_atoms_within_residue(test_structure, test_cif_file.block, biotite_ccd_wrapper)
+    resolved_array = add_unresolved_atoms_within_residue(
+        test_structure, test_cif_file.block, biotite_ccd_wrapper
+    )
     # Verify that residue 3B contains unresolved atoms
-    original_residue_3B = test_structure[(test_structure.res_id == 3) & (test_structure.chain_id == "B")]
-    resolved_residue_3B = resolved_array[(resolved_array.res_id == 3) & (resolved_array.chain_id == "B")]
+    original_residue_3B = test_structure[
+        (test_structure.res_id == 3) & (test_structure.chain_id == "B")
+    ]
+    resolved_residue_3B = resolved_array[
+        (resolved_array.res_id == 3) & (resolved_array.chain_id == "B")
+    ]
 
-    assert len(resolved_residue_3B) > len(original_residue_3B), "Resolved residue 3B should contain more atoms than the original residue."
+    assert len(resolved_residue_3B) > len(original_residue_3B), (
+        "Resolved residue 3B should contain more atoms than the original residue."
+    )
 
     # Tokenize the resolved residue
     tokenize_atom_array(resolved_residue_3B)
-    
-    assert all(resolved_residue_3B.token_id == 0), "Expect all atoms in residue with unresolved atoms map to same token id" 
+
+    assert all(resolved_residue_3B.token_id == 0), (
+        "Expect all atoms in residue with unresolved atoms map to same token id"
+    )
