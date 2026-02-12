@@ -7,12 +7,13 @@ from openfold3.core.data.primitives.structure.component import BiotiteCCDWrapper
 from openfold3.core.data.primitives.structure.metadata import get_cif_block
 from openfold3.core.data.primitives.structure.tokenization import tokenize_atom_array
 
-TEST_DIR = Path(__file__).parent 
+TEST_DIR = Path(__file__).parent
 
 
 def construct_sanitized_atom_array(example_name: str):
     cif_file, atom_array = parse_mmcif(
-        f"/Users/jennifer/Documents/of-data/raw/{example_name.upper()}.cif", expand_bioassembly=True
+        f"raw/{example_name.upper()}.cif",  # <- change this directory as needed
+        expand_bioassembly=True,
     )
     cif_data = get_cif_block(cif_file)
     ccd_file = BiotiteCCDWrapper()
