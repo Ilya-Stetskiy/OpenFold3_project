@@ -39,16 +39,6 @@ model_update:
   presets: 
     - train
 
-# Example modifications for larger validation samples and grad tracking
-#  custom:
-#    settings:
-#      memory:
-#        eval:
-#          chunk_size: 1024
-#      debug:
-#        log_grad_norm: true
-#        log_extra_grad_metrics: true
-
 dataset_configs:
   train:
     weighted-pdb:

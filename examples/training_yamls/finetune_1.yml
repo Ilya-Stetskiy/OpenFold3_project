@@ -49,9 +49,6 @@ model_update:
       shared: 
         diffusion:
           no_samples: 32
-      template:
-        template_pair_stack:
-          ckpt_per_template: true
       loss_module:
         diffusion:
           chunk_size: 2

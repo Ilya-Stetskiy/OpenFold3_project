@@ -41,7 +41,6 @@ model_update:
   custom:
     settings:
       model_selection_weight_scheme: fine_tuning
-      clear_cache_between_steps: true
       memory:
         train:
           msa_module:
@@ -50,13 +49,9 @@ model_update:
       shared: 
         diffusion:
           no_samples: 32
-      template:
-        template_pair_stack:
-          ckpt_per_template: true
       loss_module:
         diffusion:
           chunk_size: 2
-          use_sparse_loss: true
 
 dataset_configs:
   train:
