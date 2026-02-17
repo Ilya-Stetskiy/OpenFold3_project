@@ -213,6 +213,7 @@ class TestAuxiliaryHeadsAllAtom(unittest.TestCase):
             batch,
             si_input,
             outputs,
+            use_zij_trunk_embedding=True,
             chunk_size=4,
         )
 

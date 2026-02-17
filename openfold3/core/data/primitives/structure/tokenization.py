@@ -136,7 +136,9 @@ def find_modified_residue_atom_ids(atom_array: AtomArray) -> np.ndarray:
     return atomized_crp_token_ids
 
 
-@log_runtime_memory(runtime_dict_key="runtime-target-structure-proc-token")
+@log_runtime_memory(
+    runtime_dict_key="runtime-target-structure-proc-token", multicall=True
+)
 def tokenize_atom_array(atom_array: AtomArray):
     """Creates token id, token center atom, and is_atomized annotations for atom array.
 

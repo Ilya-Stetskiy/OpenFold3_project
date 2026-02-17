@@ -4,11 +4,11 @@ from pathlib import Path
 import click
 
 from openfold3.core.data.io.s3 import parse_s3_config
-from openfold3.core.data.pipelines.preprocessing.caches.protein_monomer import (
-    create_protein_monomer_dataset_cache_of3,
+from openfold3.core.data.pipelines.preprocessing.caches.RNA_monomer import (
+    create_RNA_monomer_dataset_cache_of3,
 )
 from openfold3.core.data.pipelines.preprocessing.structure import (
-    preparse_protein_monomer_structures,
+    preparse_RNA_monomer_structures,
 )
 
 logger = logging.getLogger(__name__)
@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
     ),
 )
 @click.option(
-    "--protein_reference_molecule_data_file",
+    "--RNA_reference_molecule_data_file",
     required=True,
     help=(
         "Path to a reference molecule data file containing the unique set of all CCD"
@@ -102,7 +102,7 @@ logger = logging.getLogger(__name__)
 )
 def main(
     data_directory: Path,
-    protein_reference_molecule_data_file: Path,
+    rna_reference_molecule_data_file: Path,
     dataset_name: str,
     output_dir: Path,
     structure_filename: str,
@@ -112,13 +112,13 @@ def main(
     num_workers: int = 1,
     chunksize: int = 1,
 ):
-    """Create a dataset cache and preparsed structures for a protein monomer dataset.
+    """Create a dataset cache and preparsed structures for a RNA monomer dataset.
 
     Args:
         data_directory (Path):
             Directory containing per-monomer folders. If the directory lives in an S3
             bucket, the path should be 's3:/<bucket>/<prefix>'.
-        protein_reference_molecule_data_file (Path):
+        RNA_reference_molecule_data_file (Path):
             Path to a reference molecule data file containing the unique set of all CCD
             reference molecules that occur in the entries. An example file is available
             in openfold3/core/data/resources.
@@ -152,9 +152,9 @@ def main(
 
     # Create cache
     logger.info("Creating dataset cache...")
-    dataset_cache = create_protein_monomer_dataset_cache_of3(
+    dataset_cache = create_RNA_monomer_dataset_cache_of3(
         data_directory=data_directory,
-        protein_reference_molecule_data_file=protein_reference_molecule_data_file,
+        RNA_reference_molecule_data_file=rna_reference_molecule_data_file,
         dataset_name=dataset_name,
         output_dir=output_dir,
         s3_client_config=s3_client_config,
@@ -164,7 +164,7 @@ def main(
 
     # Pre-parse structures into pkl/npz files
     logger.info("Pre-parsing structures...")
-    preparse_protein_monomer_structures(
+    preparse_RNA_monomer_structures(
         dataset_cache=dataset_cache,
         data_directory=data_directory,
         structure_filename=structure_filename,

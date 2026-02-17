@@ -489,10 +489,11 @@ def mol_from_atomarray(atom_array: AtomArray) -> AnnotatedMol:
     conf = Chem.Conformer(atom_array.array_length())
     for idx, atom in enumerate(atom_array):
         element = atom.element.capitalize()
-        atomic_number = PERIODIC_TABLE.GetAtomicNumber(element)
 
         if element == "X":
             element = "*"
+
+        atomic_number = PERIODIC_TABLE.GetAtomicNumber(element)
 
         new_atom = Chem.Atom(atomic_number)
         new_atom.SetFormalCharge(int(atom.charge.item()))

@@ -311,7 +311,7 @@ MOLECULE_TYPE_TO_UKNOWN_RESIDUES_3 = {
 MOLECULE_TYPE_TO_UNKNOWN_RESIDUES_1 = {
     MoleculeType.PROTEIN: "X",
     MoleculeType.RNA: "N",
-    MoleculeType.DNA: "DN",
+    MoleculeType.DNA: "N",
     MoleculeType.LIGAND: "X",
 }
 

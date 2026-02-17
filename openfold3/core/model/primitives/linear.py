@@ -99,10 +99,12 @@ class Linear(nn.Linear):
                 elif init == "gating":
                     gating_init_(self.weight)
                     if bias:
-                        self.bias.fill_(1.0)
+                        with torch.no_grad():
+                            self.bias.fill_(1.0)
                 elif init == "gating_ada_zero":
                     gating_init_(self.weight)
-                    self.bias.fill_(-2.0)
+                    with torch.no_grad():
+                        self.bias.fill_(-2.0)
                 elif init == "normal":
                     kaiming_normal_init_(self.weight)
                 elif init == "final":

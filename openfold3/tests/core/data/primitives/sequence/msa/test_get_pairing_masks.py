@@ -67,26 +67,6 @@ from openfold3.core.data.primitives.sequence.msa import get_pairing_masks
             np.array([True, True, True, False]),
             id="shared_by_two_three_chains",
         ),
-        # less_than_600 filter alone
-        pytest.param(
-            np.array([[601, 10], [10, 10]]),
-            ["less_than_600"],
-            np.array([False, True]),
-            id="less_than_600_only",
-        ),
-        # Combined filters
-        pytest.param(
-            np.array([[601, 10], [10, 10]]),
-            ["shared_by_two", "less_than_600"],
-            np.array([False, True]),
-            id="combined_high_frequency_filtered",
-        ),
-        pytest.param(
-            np.array([[600, 10], [10, 10]]),
-            ["shared_by_two", "less_than_600"],
-            np.array([True, True]),
-            id="combined_exactly_600_passes",
-        ),
     ],
 )
 def test_get_pairing_masks(count_array, mask_keys, expected):

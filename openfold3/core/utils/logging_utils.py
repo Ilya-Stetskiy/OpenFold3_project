@@ -185,3 +185,21 @@ class ContextInjectingFilter(logging.Filter):
 
         # Allow the record to pass through the filter
         return True
+
+
+@contextmanager
+def suppress_warnings(logger_name=None):
+    """
+    A context manager to temporarily suppress logging.WARNING messages.
+
+    Args:
+        logger_name (str, optional): The name of the logger to modify.
+            If None, the root logger is used.
+    """
+    logger = logging.getLogger(logger_name)
+    original_level = logger.level
+    try:
+        logger.setLevel(logging.ERROR)  # Suppress WARNING and INFO
+        yield
+    finally:
+        logger.setLevel(original_level)

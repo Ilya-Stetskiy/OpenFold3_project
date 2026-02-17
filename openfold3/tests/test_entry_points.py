@@ -89,7 +89,11 @@ class TestTrainingExperiment:
                         config:
                             debug_mode: true
                             crop:
-                                token_budget: 640 
+                                token_crop:
+                                    token_budget: 640 
+                                chain_crop:
+                                    enabled: true
+                                    n_chains: 25
                             loss:
                                 bond: 4.0
                                 smooth_lddt: 0.0
@@ -172,7 +176,9 @@ class TestTrainingExperiment:
 
         weighted_pdb_spec = expt_runner.data_module_config.datasets[0]
         assert weighted_pdb_spec.weight == 1
-        assert weighted_pdb_spec.config.crop.token_budget == 640
+        assert weighted_pdb_spec.config.crop.token_crop.token_budget == 640
+        assert weighted_pdb_spec.config.crop.chain_crop.enabled is True
+        assert weighted_pdb_spec.config.crop.chain_crop.n_chains == 25
 
     @pytest.mark.parametrize("pl_checkpoint_option", [None, "last", "hpc", "registry"])
     def test_pl_checkpoint_load_options(self, pl_checkpoint_option):
@@ -261,6 +267,10 @@ class TestModelUpdate:
         # Verify settings from model_update section are also applied
         assert model_config.architecture.shared.num_recycles == 1
 
+    @pytest.mark.skip(
+        reason="PAE head is enabled by default for now. "
+        "Test will be removed in the future."
+    )
     def test_pae_disabled_if_preset_not_selected(self, tmp_path, dummy_ckpt_file):
         """Test pae not set if only predict preset specified experiment runner."""
         test_yaml_str = textwrap.dedent("""\
@@ -277,6 +287,10 @@ class TestModelUpdate:
         expt_runner = InferenceExperimentRunner(expt_config)
         assert not expt_runner.pae_enabled, "Expected pae_head not to be enabled."
 
+    @pytest.mark.skip(
+        reason="PAE head is enabled by default for now. "
+        "Test will be removed in the future."
+    )
     def test_pae_enabled(self, tmp_path, dummy_ckpt_file):
         """Test pae enabled updates experiment runner."""
         test_yaml_str = textwrap.dedent("""\

@@ -168,10 +168,7 @@ class ExperimentRunner(ABC):
 
     @cached_property
     def lightning_data_module(self):
-        return DataModule(
-            self.data_module_config,
-            world_size=self.world_size,
-        )
+        return DataModule(self.data_module_config)
 
     ###############
     # Distributed properties
@@ -277,9 +274,6 @@ class ExperimentRunner(ABC):
                 "strategy": self.strategy,
                 "callbacks": self.callbacks,
                 "logger": self.loggers,
-                # If DeepSpeed is enabled, these values will be passed to the DS config
-                "gradient_clip_val": self.model_config.settings.gradient_clipping,
-                "gradient_clip_algorithm": "norm",
             }
         )
 
@@ -341,6 +335,8 @@ class TrainingExperimentRunner(ExperimentRunner):
         self.logging_config = experiment_config.logging_config
         self.checkpoint_config = experiment_config.checkpoint_config
 
+        self.update_trainer_config()
+
     def setup(self) -> None:
         """Set up the experiment environment.
 
@@ -349,12 +345,55 @@ class TrainingExperimentRunner(ExperimentRunner):
         """
         super().setup()
         self._setup_logger()
-        self._set_random_seed()
         if self.use_wandb:
             self._wandb_setup()
 
         if self.do_manual_ckpt_loading:
             self.manual_load_checkpoint()
+
+    def update_trainer_config(self):
+        """
+        Update trainer configuration based on model settings.
+        This handles gradient clipping and accumulation settings.
+        """
+        if self.model_config.settings.gradient_clipping.per_sample_clipping:
+            # The training step with per-sample gradient clipping handles this
+            # internally PL does not support manual optimization with
+            # accumulate_grad_batches
+            if self.pl_trainer_args.accumulate_grad_batches > 1:
+                # If set in trainer args, move to model config and set to 1 in trainer
+                pl_accum_grad_batches = self.pl_trainer_args.accumulate_grad_batches
+                self.model_config.update(
+                    {
+                        "settings": {
+                            "manual_optimization": {
+                                "accumulate_grad_batches": pl_accum_grad_batches
+                            }
+                        }
+                    }
+                )
+                self.pl_trainer_args.accumulate_grad_batches = 1
+
+            # Disable the `LearningRateMonitor` callback, logging is handled
+            # manually in the training step
+            if self.logging_config.log_lr and self.use_wandb:
+                self.model_config.update(
+                    {"settings": {"manual_optimization": {"log_lr": True}}}
+                )
+                self.logging_config.log_lr = False
+
+        else:
+            # If not doing per-sample grad clipping, set the clipping value in
+            # the trainer args to be handled by PL
+            clip_val = self.model_config.settings.gradient_clipping.clip_val
+
+            # If DeepSpeed is enabled, these values will be passed to the DS config
+            self.pl_trainer_args.gradient_clip_val = clip_val
+            self.pl_trainer_args.gradient_clip_algorithm = "norm"
+
+        # Update distributed sync seed used in the model
+        # Currently used to sync the number of recycles across ranks
+        self.model_config.update({"architecture": {"shared": {"sync_seed": self.seed}}})
 
     @cached_property
     def data_module_config(self) -> DataModuleConfig:
@@ -380,7 +419,9 @@ class TrainingExperimentRunner(ExperimentRunner):
         # If resuming from existing wandb run, do not manually load checkpoint
         if self.resume_existing_run:
             return False
-        return self.ckpt_load_settings.manual_checkpoint_loading
+        do_manual = self.ckpt_load_settings.manual_checkpoint_loading
+        logger.info(f"Manual checkpoint loading: {do_manual}")
+        return do_manual
 
     def manual_load_checkpoint(self):
         init_from_ema_weights = self.ckpt_load_settings.init_from_ema_weights
@@ -463,30 +504,6 @@ class TrainingExperimentRunner(ExperimentRunner):
         log_level = log_level.upper()
         log_filepath = self.log_dir / "console_logs.log"
         logging.basicConfig(filename=log_filepath, level=log_level, filemode="w")
-
-    def _set_random_seed(self) -> None:
-        """Set the random seed for reproducibility."""
-
-        seed = self.seed
-        if seed is None and self.is_distributed:
-            raise ValueError("For distributed training, seed must be specified")
-
-        if not isinstance(seed, int):
-            raise ValueError(
-                f"seed={seed} must be an integer. Please provide a valid seed."
-            )
-
-        logger.info(f"Running with seed: {seed}")
-
-        # The datamodule is reseeded with the data_seed, and the model will be
-        # reseeded per rank with the RankSpecificSeedCallback, so most of the
-        # seed_everything() initialization does not matter. This does still
-        # seed the distributed sampler, which will otherwise default to seed 0.
-        pl.seed_everything(seed, workers=True)
-
-        update_dict = {"architecture": {"shared": {"sync_seed": seed}}}
-
-        self.model_config.update(update_dict)
 
     @cached_property
     def loggers(self):
@@ -618,7 +635,7 @@ class InferenceExperimentRunner(ExperimentRunner):
                 completed_structures.append(query_id)
 
         logger.info(
-            "Skipping existing structures is enabled.Will skip "
+            "Skipping existing structures is enabled. Will skip "
             f"the following {len(completed_structures)} structures:"
             f" {completed_structures}"
         )
@@ -696,7 +713,6 @@ class InferenceExperimentRunner(ExperimentRunner):
     def lightning_data_module(self):
         return InferenceDataModule(
             self.data_module_config,
-            world_size=self.world_size,
             use_msa_server=self.use_msa_server,
             use_templates=self.use_templates,
             msa_computation_settings=self.experiment_config.msa_computation_settings,

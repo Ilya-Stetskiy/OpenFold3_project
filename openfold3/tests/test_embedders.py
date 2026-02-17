@@ -86,9 +86,16 @@ class TestMSAModuleEmbedder:
                     "max_subsampled_all_msa": 1024,
                 }
             )
+        else:
+            msa_emb_config.update(
+                {
+                    "subsample_main_msa": True,
+                    "subsample_all_msa": False,
+                }
+            )
 
         batch_asym_ids = [
-            torch.as_tensor(random_asym_ids(n_token)) for _ in range(batch_size)
+            torch.Tensor(random_asym_ids(n_token)).int() for _ in range(batch_size)
         ]
         batch_asym_ids = torch.stack(batch_asym_ids)
 

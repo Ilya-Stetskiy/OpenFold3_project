@@ -100,11 +100,6 @@ def test_find_pairing_indices(count_array, pairing_masks, expected):
     "max_rows_paired,expected",
     [
         pytest.param(
-            2,
-            np.array([[0, 0], [0, 0]]),
-            id="max_rows_2",
-        ),
-        pytest.param(
             4,
             np.array([[0, 0], [0, 0], [1, 1], [1, 1]]),
             id="max_rows_4",

@@ -86,6 +86,27 @@ class CheckpointConfig(BaseModel):
     save_last: bool = True
     save_top_k: int = -1
 
+    every_n_train_steps: int | None = None
+    train_time_interval: Any | None = None
+
+    @model_validator(mode="after")
+    def validate_checkpoint_settings(self):
+        if self.every_n_train_steps not in (None, 0):
+            raise ValueError(
+                "Mid-epoch checkpointing is not allowed: set "
+                "checkpoint_config.every_n_train_steps to null. "
+                "Use every_n_epochs in the checkpoint callback "
+                "config for epoch-boundary checkpointing."
+            )
+        if self.train_time_interval not in (None, 0, "", False):
+            raise ValueError(
+                "Mid-epoch checkpointing is not allowed: set "
+                "checkpoint_config.train_time_interval to null. "
+                "Use every_n_epochs in the checkpoint callback "
+                "config for epoch-boundary checkpointing."
+            )
+        return self
+
 
 class WandbConfig(BaseModel):
     """Configuration for Weights and Biases experiment result logging."""
@@ -131,11 +152,27 @@ class PlTrainerArgs(BaseModel):
     log_every_n_steps: int = 1
     enable_checkpointing: bool = True
     enable_model_summary: bool = False
+    accumulate_grad_batches: int = 1
+    gradient_clip_val: int | float | None = None
+    gradient_clip_algorithm: str | None = None
 
     # Extra arguments that are not passed directly to pl.Trainer
     deepspeed_config_path: Path | None = None
     distributed_timeout: timedelta | None = default_pg_timeout
     mpi_plugin: bool = False
+
+    use_distributed_sampler: bool = True
+
+    @model_validator(mode="after")
+    def validate_distributed_sampler_settings(self):
+        if self.use_distributed_sampler is False:
+            warnings.warn(
+                "pl_trainer_args.use_distributed_sampler is set to False. "
+                "Note that this arg is currently being ignored as we always use "
+                "the OF3DistributedSampler for training.",
+                stacklevel=2,
+            )
+        return self
 
 
 class OutputWritingSettings(BaseModel):
@@ -304,6 +341,12 @@ class TrainingExperimentConfig(ExperimentConfig):
         """
         model_seed = self.experiment_settings.seed
         data_seed = self.data_module_args.data_seed
+        world_size = self.pl_trainer_args.devices * self.pl_trainer_args.num_nodes
+
+        # TODO: Currently this will never be true because 42 is the default seed.
+        #  Revisit after removing the default seed value for training and inference
+        if model_seed is None and world_size > 1:
+            raise ValueError("For distributed training, seed must be specified")
 
         if data_seed is None:
             self.data_module_args.data_seed = model_seed

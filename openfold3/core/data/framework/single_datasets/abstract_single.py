@@ -91,6 +91,8 @@ class SingleDataset(ABC, Dataset):
         if not self.__class__._registered:
             raise DatasetNotRegisteredError(self.__class__.__name__)
 
+        self.dataset_cache = None
+        self.datapoint_cache = None
         self.datapoint_index = None
 
     def __post_init__(self) -> None:

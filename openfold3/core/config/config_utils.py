@@ -85,6 +85,23 @@ def _convert_molecule_type(value: Any) -> Any:
         return [_convert_molecule_type(v) for v in value]
 
 
+def deep_update(base_dict: dict, update_dict: dict) -> dict:
+    """
+    Recursively updates base_dict with update_dict. If a key exists
+    in update_dict but not base_dict, it is added to base_dict.
+    """
+    for key, value in update_dict.items():
+        if (
+            key in base_dict
+            and isinstance(base_dict[key], dict)
+            and isinstance(value, dict)
+        ):
+            deep_update(base_dict[key], value)
+        else:
+            base_dict[key] = value
+    return base_dict
+
+
 def is_path_none(value: str | Path | None) -> Path | None:
     if isinstance(value, Path):
         return value

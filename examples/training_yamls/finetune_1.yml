@@ -41,6 +41,10 @@ model_update:
   custom:
     settings:
       model_selection_weight_scheme: fine_tuning
+      memory:
+        train:
+          msa_module:
+            swiglu_seq_chunk_size: 1024
     architecture:
       shared: 
         diffusion:
@@ -60,11 +64,15 @@ dataset_configs:
           n_templates: 4
           take_top_k: false
         crop:
-          token_budget: 640
-          crop_weights:
-            contiguous: 0.2
-            spatial: 0.4
-            spatial_interface: 0.4
+          token_crop:
+            enabled: true
+            token_budget: 640
+            crop_weights:
+              contiguous: 0.2
+              spatial: 0.4
+              spatial_interface: 0.4
+          chain_crop:
+            enabled: true
         loss:
           loss_weights:
             bond: 4.0
@@ -80,17 +88,20 @@ dataset_configs:
           take_top_k: false
         sample_in_order: true
         crop:
-          token_budget: 640 
-          crop_weights:
-            contiguous: 0.25
-            spatial: 0.75
-            spatial_interface: 0.0
+          token_crop:
+            enabled: true
+            token_budget: 640 
+            crop_weights:
+              contiguous: 0.25
+              spatial: 0.75
+              spatial_interface: 0.0
         loss:
           loss_weights:
             bond: 4.0
             smooth_lddt: 0.0
             experimentally_resolved: 0.0
             plddt: 0.0
+            pae: 0.0
             pde: 0.0
 
 
@@ -104,17 +115,20 @@ dataset_configs:
           take_top_k: false
         sample_in_order: true
         crop:
-          token_budget: 640 
-          crop_weights:
-            contiguous: 0.25
-            spatial: 0.75
-            spatial_interface: 0.0
+          token_crop:
+            enabled: true
+            token_budget: 640 
+            crop_weights:
+              contiguous: 0.25
+              spatial: 0.75
+              spatial_interface: 0.0
         loss:
           loss_weights:
             bond: 4.0
             smooth_lddt: 0.0
             experimentally_resolved: 0.0
             plddt: 0.0
+            pae: 0.0
             pde: 0.0
 
 
@@ -128,17 +142,44 @@ dataset_configs:
           take_top_k: false
         disable_non_protein_diffusion_weights: false   # set to F in fine tuning
         crop:
-          token_budget: 640
-          crop_weights:
-            contiguous: 0.2
-            spatial: 0.4
-            spatial_interface: 0.4
+          token_crop:
+            enabled: true
+            token_budget: 640
+            crop_weights:
+              contiguous: 0.2
+              spatial: 0.4
+              spatial_interface: 0.4
+          chain_crop:
+            enabled: true
         loss:
           loss_weights:
             bond: 4.0
             smooth_lddt: 0.0
             experimentally_resolved: 0.0
             plddt: 0.0
+            pae: 0.0
+            pde: 0.0
+
+    RNA-monomer-distillation:
+      dataset_class: RNAMonomerDataset
+      weight: 0.05
+      config:
+        debug_mode: true
+        crop:
+          token_crop:
+            enabled: true
+            token_budget: 640
+            crop_weights:
+              contiguous: 0.25
+              spatial: 0.75
+              spatial_interface: 0.0
+        loss:
+          loss_weights:
+            bond: 4.0
+            smooth_lddt: 0.0
+            experimentally_resolved: 0.0
+            plddt: 0.0
+            pae: 0.0
             pde: 0.0
 
   validation:
@@ -146,9 +187,14 @@ dataset_configs:
       dataset_class: ValidationPDBDataset
       config:
         debug_mode: true
+        msa:
+          subsample_main: false
         template:
           n_templates: 4
           take_top_k: true
+        crop:
+          token_crop:
+            enabled: false
 
 dataset_paths:
   weighted-pdb:
@@ -162,7 +208,7 @@ dataset_paths:
     template_cache_directory: /path/ 
     template_structure_array_directory: /path/ 
     template_structures_directory: none
-    template_file_format: pkl
+    template_file_format: npz
     ccd_file: /path 
 
   long-monomer-distillation:
@@ -176,7 +222,7 @@ dataset_paths:
     template_cache_directory: /path/ 
     template_structure_array_directory: /path/ 
     template_structures_directory: none
-    template_file_format: pkl
+    template_file_format: npz
     ccd_file: /path 
     use_roda_monomer_format: True
 
@@ -191,7 +237,7 @@ dataset_paths:
     template_cache_directory: /path/ 
     template_structure_array_directory: /path/ 
     template_structures_directory: none
-    template_file_format: pkl
+    template_file_format: npz
     ccd_file: /path 
     use_roda_monomer_format: True
 
@@ -206,8 +252,23 @@ dataset_paths:
     template_cache_directory: /path/ 
     template_structure_array_directory: /path/ 
     template_structures_directory: none
-    template_file_format: pkl
+    template_file_format: npz
     ccd_file: /path
+
+  RNA-monomer-distillation:
+    alignments_directory: none
+    alignment_db_directory: none
+    alignment_array_directory: /path/
+    dataset_cache_file: /path/
+    target_structures_directory: /path
+    target_structure_file_format: npz
+    reference_molecule_directory: /path/
+    template_cache_directory: /path/
+    template_structure_array_directory: /path/
+    template_structures_directory: none
+    template_file_format: npz
+    ccd_file: /path
+    use_roda_monomer_format: True
 
   val-weighted-pdb:
     alignments_directory: none 
@@ -220,5 +281,5 @@ dataset_paths:
     template_cache_directory: /path/ 
     template_structure_array_directory: /path/ 
     template_structures_directory: none
-    template_file_format: pkl
+    template_file_format: npz
     ccd_file: /path 
