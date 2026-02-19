@@ -20,9 +20,6 @@ from datetime import timedelta
 from pathlib import Path
 from typing import Any, Literal
 
-import boto3
-import botocore
-from botocore.config import Config as botocoreConfig
 from lightning_fabric.plugins.collectives.torch_collective import default_pg_timeout
 from pydantic import BaseModel, field_validator, model_validator
 from pydantic import ConfigDict as PydanticConfigDict
@@ -31,6 +28,12 @@ from openfold3.core.data.pipelines.preprocessing.template import (
     TemplatePreprocessorSettings,
 )
 from openfold3.core.data.tools.colabfold_msa_server import MsaComputationSettings
+from openfold3.entry_points.download_parameters import (
+    CHECKPOINT_NAME,
+    CHECKPOINT_ROOT_FILENAME,
+    DEFAULT_CACHE_PATH,
+    download_model_parameters,
+)
 from openfold3.projects.of3_all_atom.config.dataset_configs import (
     InferenceDatasetConfigKwargs,
     TrainingDatasetPaths,
@@ -40,42 +43,6 @@ from openfold3.projects.of3_all_atom.project_entry import ModelUpdate
 logger = logging.getLogger(__name__)
 
 ValidModeType = Literal["train", "predict", "eval", "test"]
-DEFAULT_CACHE_PATH = Path("~/.openfold3/").expanduser()
-CHECKPOINT_ROOT_FILENAME = "ckpt_root"
-CHECKPOINT_NAME = "of3_ft3_v1.pt"
-
-
-def _maybe_download_parameters(target_path: Path) -> None:
-    """Checks if OpenFold parameters are present, and downloads them if not."""
-    openfold_bucket = "openfold"
-    checkpoint_path = f"openfold3_params/{CHECKPOINT_NAME}"
-
-    if target_path.exists():
-        return
-
-    s3 = boto3.client("s3", config=botocoreConfig(signature_version=botocore.UNSIGNED))
-
-    try:
-        # Get file size
-        response = s3.head_object(Bucket=openfold_bucket, Key=checkpoint_path)
-        size_bytes = response["ContentLength"]
-        size_gb = size_bytes / (1024**3)
-
-        # Ask for confirmation with file size
-        confirm = input(
-            f"Download {checkpoint_path} ({size_gb:.2f} GB) "
-            f"from s3://{openfold_bucket} to {target_path}? (yes/no): "
-        )
-
-        if confirm.lower() in ["yes", "y"]:
-            logger.info(f"Downloading to {target_path}...")
-            s3.download_file(openfold_bucket, checkpoint_path, target_path)
-            logger.info("Download complete!")
-        else:
-            logger.warning("Download cancelled")
-
-    except Exception as e:
-        print(f"Error: {e}")
 
 
 class CheckpointConfig(BaseModel):
@@ -438,7 +405,7 @@ class InferenceExperimentConfig(ExperimentConfig):
                 with open(path_to_ckpt, "w") as f:
                     f.write(str(param_dir))
                 self.inference_ckpt_path = param_dir / CHECKPOINT_NAME
-            _maybe_download_parameters(self.inference_ckpt_path)
+            download_model_parameters(param_dir)
         else:
             raise ValueError(
                 f"Provided checkpoint path {self.inference_ckpt_path} does not exist"

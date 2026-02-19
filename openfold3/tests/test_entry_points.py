@@ -526,9 +526,9 @@ class TestInferenceCheckpointLoading:
         assert expt_config.inference_ckpt_path == dummy_ckpt_file
 
     def test_inference_ckpt_path_defaults(self, tmp_path):
-        with patch(
-            "openfold3.entry_points.validator._maybe_download_parameters",
-            side_effect=_create_fake_file,
+        with (
+            patch("builtins.input", return_value="yes"),
+            patch("openfold3.entry_points.download_parameters.download_s3_file"),
         ):
             expt_config = InferenceExperimentConfig.model_validate(
                 {"cache_path": tmp_path}
@@ -589,7 +589,7 @@ class TestRemoveQuerySetDuplicates:
 
         return tmp_path
 
-    def test_remove_duplicates(self, dummy_output_path):
+    def test_remove_duplicates(self, dummy_ckpt_file, dummy_output_path):
         input_query_set = InferenceQuerySet.model_validate(
             {
                 "queries": {
@@ -625,7 +625,10 @@ class TestRemoveQuerySetDuplicates:
         )
 
         experiment_config = InferenceExperimentConfig.model_validate(
-            {"experiment_settings": {"seeds": [42, 43]}}
+            {
+                "experiment_settings": {"seeds": [42, 43]},
+                "inference_ckpt_path": dummy_ckpt_file,
+            }
         )
         expt_runner = InferenceExperimentRunner(
             experiment_config, num_diffusion_samples=2, output_dir=dummy_output_path

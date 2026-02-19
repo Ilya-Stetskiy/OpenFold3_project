@@ -28,6 +28,10 @@ from pathlib import Path
 import biotite.setup_ccd
 
 from openfold3.core.utils.s3 import download_s3_file, s3_file_matches_local
+from openfold3.entry_points.download_parameters import (
+    CHECKPOINT_NAME,
+    download_model_parameters,
+)
 
 S3_BUCKET = "openfold3-data"
 S3_KEY = "components.bcif"
@@ -106,7 +110,7 @@ def setup_param_directory(
     """Check and set up the parameter directory."""
 
     # Check if parameters have already been downloaded
-    if ckpt_root_file.exists():
+    if ckpt_root_file.exists() and (ckpt_root_file / CHECKPOINT_NAME).exists():
         existing_path = Path(ckpt_root_file.read_text().strip())
         logger.info(
             f"OpenFold3 parameters may already be installed at: {existing_path}"
@@ -162,21 +166,9 @@ def setup_param_directory(
 
 
 def download_parameters(param_dir) -> None:
-    """Perform the download using the download script."""
+    """Perform the parameter download."""
     logger.info("Starting parameter download...")
-
-    # Get the directory where this script is located
-    script_dir = Path(__file__).parent / "scripts"
-    download_script = script_dir / "download_openfold3_params.sh"
-
-    result = subprocess.run(
-        ["bash", str(download_script), f"--download_dir={param_dir}"], check=False
-    )
-
-    if result.returncode != 0:
-        logger.error("Download failed. Exiting.")
-        sys.exit(1)
-
+    download_model_parameters(Path(param_dir))
     logger.info("Download completed successfully.")
 
 
