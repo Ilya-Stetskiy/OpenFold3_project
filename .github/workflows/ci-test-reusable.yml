@@ -79,13 +79,20 @@ jobs:
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:test-${{ inputs.cuda_base_image_tag }}-${{ github.sha }}
           cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:cache-${{ inputs.cuda_base_image_tag }}
           cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:cache-${{ inputs.cuda_base_image_tag }},mode=max
+      
+      - name: Check ccd setup
+        run: |
+          docker run \
+            -v ${{ github.workspace }}:/opt/openfold3 \
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:test-${{ inputs.cuda_base_image_tag }}-${{ github.sha }} \
+            python -c "from openfold3.setup_openfold import setup_biotite_ccd; import biotite.setup_ccd; setup_biotite_ccd(ccd_path=biotite.setup_ccd.OUTPUT_CCD, force_download=False)"
 
       - name: Run unit tests
         run: |
           docker run \
             -v ${{ github.workspace }}:/opt/openfold3 \
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:test-${{ inputs.cuda_base_image_tag }}-${{ github.sha }} \
-            pytest openfold3/tests -vvv -n auto --cov=openfold3 --cov-report=xml --cov-report=term
+            pytest openfold3/tests -vvv -n auto --cov=openfold3 --cov-report=xml --cov-report=term --skip-ccd-update
 
       - name: Debug - List files and find coverage
         if: always()
