@@ -91,6 +91,13 @@ def train(runner_yaml: Path, seed: int | None = None, data_seed: int | None = No
     "$OPENFOLD_CACHE [default: ~/.openfold3/]",
 )
 @click.option(
+    "--inference_ckpt_name",
+    type=str,
+    required=False,
+    help="Name of the checkpoint to be used for inference."
+    " Only used if `inference_ckpt_path` is not specified.",
+)
+@click.option(
     "--num_diffusion_samples",
     type=int,
     default=None,
@@ -131,6 +138,7 @@ def train(runner_yaml: Path, seed: int | None = None, data_seed: int | None = No
 def predict(
     query_json: Path,
     inference_ckpt_path: Path | None = None,
+    inference_ckpt_name: str | None = None,
     num_diffusion_samples: int | None = None,
     num_model_seeds: int | None = None,
     runner_yaml: Path | None = None,
@@ -155,7 +163,9 @@ def predict(
     runner_args = config_utils.load_yaml(runner_yaml) if runner_yaml else dict()
 
     expt_config = InferenceExperimentConfig(
-        inference_ckpt_path=inference_ckpt_path, **runner_args
+        inference_ckpt_path=inference_ckpt_path,
+        inference_ckpt_name=inference_ckpt_name,
+        **runner_args,
     )
     expt_runner = InferenceExperimentRunner(
         expt_config,

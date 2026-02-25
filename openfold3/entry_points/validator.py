@@ -397,30 +397,34 @@ class InferenceExperimentConfig(ExperimentConfig):
             )
         elif self.inference_ckpt_name is None:
             logger.info(
-                "No inference ckpt path or name provided, using default checkpoint."
+                "No inference_ckpt_path or inference_ckpt_name provided, "
+                "selecting default checkpoint."
             )
             self.inference_ckpt_name = DEFAULT_CHECKPOINT_NAME
             return self
 
     @model_validator(mode="after")
     def _try_default_ckpt_path(self):
-        """Attempt to use default checkpoint.
+        """Attempt to use and/or download default checkpoint.
 
-        Because this check runs after `validate_ckpt_settings`, no inference_ckpt_path
-        is provided by the user. This function will
+        This function will:
         1) Attempt to find the checkpoints in the path specified by
            `cache_path` / `CHECKPOINT_ROOT_FILENAME`,
-        2) If not found, attempt to download the checkpoints to `cache_path` and
-           write the checkpoint root file.
+        2) If not found, attempt to download the specified checkpoint name
+        (self.inference_ckpt_name to `cache_path` and write the checkpoint root file.
         3) Set the inference_ckpt_path to the found or downloaded checkpoint path.
         """
-        # Set the parameters directory based on path in root file if provided.
+        # Skip ckpt selection if ckpt is previously specified
+        if self.inference_ckpt_path is not None:
+            return self
+
+        # Set the parameters directory based on path in the ckpt_root file if provided.
         if (Path(self.cache_path) / CHECKPOINT_ROOT_FILENAME).exists():
             param_dir = Path(
                 (self.cache_path / CHECKPOINT_ROOT_FILENAME).read_text().strip()
             )
         else:
-            # Write ckpt_root file parameters if not present
+            # Write ckpt_root file if none exists
             param_dir = Path(self.cache_path)
             ckpt_root_file = self.cache_path / CHECKPOINT_ROOT_FILENAME
             logger.info(
