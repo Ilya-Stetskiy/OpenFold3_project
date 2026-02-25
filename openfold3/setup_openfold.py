@@ -129,10 +129,47 @@ def setup_param_directory(
 
 def download_parameters(param_dir) -> None:
     """Perform the parameter download."""
+    all_checkpoints = list(OPENFOLD_MODEL_CHECKPOINT_REGISTRY.keys())
+
+    logger.info("Select parameters to download:")
+    logger.info(f"1) Download only the default checkpoint ({DEFAULT_CHECKPOINT_NAME})")
+    logger.info(f"2) Download all parameters ({', '.join(all_checkpoints)}) (default)")
+    logger.info("3) Download a specific parameter by name")
+
+    choice = input("Enter your choice (1/2/3, default: 1): ").strip() or "1"
+
     logger.info("Starting parameter download...")
-    download_model_parameters(
-        Path(param_dir), DEFAULT_CHECKPOINT_NAME, force_download=True
-    )
+
+    if choice == "1":
+        download_model_parameters(
+            Path(param_dir),
+            DEFAULT_CHECKPOINT_NAME,
+            force_download=True,
+            skip_confirmation=True,
+        )
+    elif choice == "2":
+        for name in all_checkpoints:
+            download_model_parameters(
+                Path(param_dir), name, force_download=True, skip_confirmation=True
+            )
+    elif choice == "3":
+        print("\nAvailable parameters:")
+        for name in all_checkpoints:
+            print(f"\n  - {name}")
+        param_name = input("Enter parameter name: ").strip()
+        if param_name not in OPENFOLD_MODEL_CHECKPOINT_REGISTRY:
+            logger.error(
+                f"Unknown parameter name '{param_name}'. "
+                f"Available parameter names are: {', '.join(all_checkpoints)}"
+            )
+            sys.exit(1)
+        download_model_parameters(
+            Path(param_dir), param_name, force_download=True, skip_confirmation=True
+        )
+    else:
+        logger.error("Invalid choice. Exiting.")
+        sys.exit(1)
+
     logger.info("Download completed successfully.")
 
 

@@ -14,8 +14,8 @@
 
 import logging
 from pathlib import Path
-from func_timeout import func_timeout, FunctionTimedOut
 
+from func_timeout import FunctionTimedOut, func_timeout
 
 from openfold3.core.utils.s3 import download_s3_file
 
@@ -36,6 +36,7 @@ def download_model_parameters(
     download_dir: Path,
     parameter_name: str,
     force_download: bool = False,
+    skip_confirmation: bool = False,
 ) -> None:
     """Download OpenFold3 model parameters from S3 if not already present.
 
@@ -43,6 +44,9 @@ def download_model_parameters(
         download_dir: Directory to download the checkpoint file into.
             The file will be saved as ``download_dir / parameters.value.filename``.
         parameters: Which set of parameters to download (e.g. OpenFold3 p2 v1).
+        skip_confirmation: If True, skip the interactive yes/no prompt and
+            download immediately. Useful when the caller has already obtained
+            user consent (e.g. via a higher-level menu).
     """
     download_dir = Path(download_dir)
 
@@ -54,23 +58,26 @@ def download_model_parameters(
         logger.info("Parameters already present at %s", target_path)
         return
 
-    _TIMEOUT_LEN = 120
-    try:
-        confirm = func_timeout(
-            _TIMEOUT_LEN,
-            input,
-            args=[
-                f"Download {CHECKPOINT_S3_KEY} from s3://{OPENFOLD_BUCKET} "
-                f"to {target_path}? (yes/no): "
-            ],
-        )
-    except FunctionTimedOut as timeout_error:
-        raise TimeoutError(
-            f"No input received within timeout of {_TIMEOUT_LEN}. Download cancelled."
-            " Consider using `setup_openfold` for initial setup of model parameters."
-        ) from timeout_error
+    if not skip_confirmation:
+        _TIMEOUT_LEN = 120
+        try:
+            confirm = func_timeout(
+                _TIMEOUT_LEN,
+                input,
+                args=[
+                    f"Download {CHECKPOINT_S3_KEY} from s3://{OPENFOLD_BUCKET} "
+                    f"to {target_path}? (yes/no): "
+                ],
+            )
+        except FunctionTimedOut as timeout_error:
+            raise TimeoutError(
+                f"No input received within timeout of {_TIMEOUT_LEN}. "
+                "Download cancelled. Consider using `setup_openfold` "
+                "for initial setup of model parameters."
+            ) from timeout_error
 
-    if confirm.lower() in ["yes", "y"]:
-        download_s3_file(OPENFOLD_BUCKET, CHECKPOINT_S3_KEY, target_path)
-    else:
-        logger.warning("Download cancelled")
+        if confirm.lower() not in ["yes", "y"]:
+            logger.warning("Download cancelled")
+            return
+
+    download_s3_file(OPENFOLD_BUCKET, CHECKPOINT_S3_KEY, target_path)
