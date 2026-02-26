@@ -52,7 +52,7 @@ def download_model_parameters(
 
     checkpoint_file_name = OPENFOLD_MODEL_CHECKPOINT_REGISTRY[parameter_name]
     target_path = download_dir / checkpoint_file_name
-    CHECKPOINT_S3_KEY = f"staging/{checkpoint_file_name}"
+    checkpoint_s3_key = f"staging/{checkpoint_file_name}"
 
     if target_path.exists() and not force_download:
         logger.info("Parameters already present at %s", target_path)
@@ -65,7 +65,7 @@ def download_model_parameters(
                 _TIMEOUT_LEN,
                 input,
                 args=[
-                    f"Download {CHECKPOINT_S3_KEY} from s3://{OPENFOLD_BUCKET} "
+                    f"Download {checkpoint_s3_key} from s3://{OPENFOLD_BUCKET} "
                     f"to {target_path}? (yes/no): "
                 ],
             )
@@ -80,4 +80,4 @@ def download_model_parameters(
             logger.warning("Download cancelled")
             return
 
-    download_s3_file(OPENFOLD_BUCKET, CHECKPOINT_S3_KEY, target_path)
+    download_s3_file(OPENFOLD_BUCKET, checkpoint_s3_key, target_path)
