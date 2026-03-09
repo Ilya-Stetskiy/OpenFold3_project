@@ -392,13 +392,16 @@ class InferenceExperimentConfig(ExperimentConfig):
     @model_validator(mode="after")
     def validate_ckpt_settings(self):
         """Validates inference_ckpt_path and inference_ckpt name settings."""
+        # Prioritize using checkpoint path when set
         if isinstance(self.inference_ckpt_path, Path):
             if self.inference_ckpt_path.exists():
                 return self
             raise ValueError(
                 f"Provided checkpoint path {self.inference_ckpt_path} does not exist"
             )
+
         elif self.inference_ckpt_name is not None:
+            # validate checkpoint name is in registry
             if self.inference_ckpt_name not in OPENFOLD_MODEL_CHECKPOINT_REGISTRY:
                 raise ValueError(
                     f"inference_ckpt_name {self.inference_ckpt_name} not found in "
@@ -406,6 +409,7 @@ class InferenceExperimentConfig(ExperimentConfig):
                     f"{list(OPENFOLD_MODEL_CHECKPOINT_REGISTRY.keys())}."
                 )
 
+            # validate checkpoint name is compatible with current version
             current_openfold3_version = Version(version("openfold3"))
             allowed_versions = SpecifierSet(
                 OPENFOLD_MODEL_CHECKPOINT_REGISTRY[
