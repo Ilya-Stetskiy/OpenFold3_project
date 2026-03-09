@@ -19,10 +19,8 @@ Welcome to the Documentation for [OpenFold3-preview](https://github.com/aqlabora
 ## Quick-Start Guide
 
 1. Install OpenFold3 using our pip package, {doc}`more details here <Installation>`
-
 ```bash
 pip install openfold3 
-mamba install kalign2 -c bioconda
 ```
 
 2. Setup your installation of OpenFold3 and download parameters with our script:

@@ -12,13 +12,13 @@ It is also recommended to use [Mamba](https://mamba.readthedocs.io/en/latest/) t
 
 ### Installation via pip and mamba (recommended) 
 
-1. Create a fresh mamba environment with python. Python versions 3.10 - 3.13 are supported
+0. [Optional] Create a fresh mamba environment with python. Python versions 3.10 - 3.13 are supported
 
 ```bash
 mamba create -n of3-pip-Oct24-server python=3.13 
 ```
 
-2. Install openfold3 the pypi server:
+1. Install openfold3 the pypi server:
 
 ```bash
 pip install openfold3
@@ -28,12 +28,6 @@ to install GPU accelerated {doc}`cuEquivariance attention kernels <kernels>`, us
 
 ```bash
 pip install openfold3[cuequivariance]
-```
-
-3. Install `kalign2` using mamba.
-
-```bash
-mamba install kalign2 -c bioconda
 ```
 
 ### OpenFold3 Docker Image
