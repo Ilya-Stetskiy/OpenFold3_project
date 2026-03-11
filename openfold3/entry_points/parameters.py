@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import logging
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -95,3 +96,26 @@ def download_model_parameters(
             return
 
     download_s3_file(OPENFOLD_BUCKET, checkpoint_s3_key, target_path)
+
+
+def get_default_checkpoint_dir(cache_path: Path | None = None) -> Path:
+    """Returns the default checkpoint directory.
+
+    Prefers to use the path specified by cache path / CHECKPOINT_ROOT_FILENAME.
+    If that file does not exist,
+     - Falls back to using the cache_path directly
+     - creates the CHECKPOINT_ROOT_FILENAME pointing to the cache path
+    """
+    if not cache_path:
+        cache_path = os.environ.get("OPENFOLD_CACHE") or DEFAULT_CACHE_PATH
+    ckpt_root_file = Path(cache_path) / CHECKPOINT_ROOT_FILENAME
+    if ckpt_root_file.exists():
+        param_dir = Path(ckpt_root_file.read_text().strip())
+    else:
+        param_dir = Path(cache_path)
+        logger.info(
+            f"Storing path to OpenFold parameters {param_dir} in {ckpt_root_file}"
+        )
+        with open(ckpt_root_file, "w") as f:
+            f.write(str(param_dir))
+    return param_dir
