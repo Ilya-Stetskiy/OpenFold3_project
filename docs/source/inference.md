@@ -73,8 +73,8 @@ Coming soon:
 
 ## 2. Pre-requisites
 
-- OpenFold3 Conda Environment. See {ref}`OpenFold3 Installation <openfold3-installation>` for instructions on how to build this environment.
-- OpenFold3 Model Parameters. See {ref}`OpenFold3 Parameters <openfold3-parameters>` for how to download these parameters.
+- OpenFold3 Conda Environment. See [OpenFold3 Installation](https://github.com/aqlaboratory/openfold-3/blob/main/docs/source/Installation.md) for instructions on how to build this environment.
+- OpenFold3 Model Parameters. See [OpenFold3 Installation](https://github.com/aqlaboratory/openfold-3/blob/main/docs/source/Installation.md) for how to download these parameters.
 
 
 ## 3. Running OpenFold3 Inference
