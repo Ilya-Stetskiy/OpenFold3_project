@@ -10,8 +10,14 @@ OpenFold3-preview is a biomolecular structure prediction model aiming to be a bi
 
 For our reproduction of AlphaFold2, please refer to the original [OpenFold repository](https://github.com/aqlaboratory/openfold).
 
+## Technical report
+A technical description of our most recent model version, OpenFold3-preview2, is available [here](https://portal.openfold.omsf.io/reports/of3p2_technical_report.pdf).
+
 ## Documentation
-Please visit our full documentation at https://openfold-3.readthedocs.io/en/latest/
+Please visit our [portal](https://portal.openfold.omsf.io/reports/of3p2_technical_report.pdf) and [full documentation](https://openfold-3.readthedocs.io/en/latest/) for instructions on running model training and inference.
+
+## Datasets
+We provide the full training data for reproducing OpenFold3-preview, including our reproduction of the MGnify-based 13M-sequence distillation dataset described in the AlphaFold3 paper. For more details about dataset access, please refer to [our portal](https://portal.openfold.omsf.io/datasets).
 
 ## Features
 
@@ -24,6 +30,7 @@ A summary of our supported features includes:
 - Kernel acceleration through [cuEquivariance](https://docs.nvidia.com/cuda/cuequivariance) and [DeepSpeed4Science](https://www.deepspeed.ai/tutorials/ds4sci_evoformerattention/) kernels - more details [here](https://openfold-3.readthedocs.io/en/latest/kernels.html)
 - Support for [multi-query jobs](https://openfold-3.readthedocs.io/en/latest/input_format.html) with [distributed predictions across multiple GPUs](https://openfold-3.readthedocs.io/en/latest/inference.html#inference-run-on-multiple-gpus)
 - Custom settings for [memory constrained GPU resources](https://openfold-3.readthedocs.io/en/latest/inference.html#inference-low-memory-mode)
+- [Training data processing](https://openfold-3.readthedocs.io/en/latest/data_pipeline_reference.html) and [model training](https://openfold-3.readthedocs.io/en/latest/training.html)
 
 ## Quick-Start for Inference
 
@@ -85,13 +92,14 @@ For more details on inferences procedures and benchmarking methods, please refer
 ## Upcoming
 The final OpenFold3 model is still in development, and we are actively working on the following features:
 - Full parity on all modalities with AlphaFold3
-- Training documentation & dataset release
 - Workflows for training on custom non-PDB data
 
-## Contributing
+## Community
 
 If you encounter problems using OpenFold3-preview, feel free to create an issue! We also
 welcome pull requests from the community.
+
+In addition, we offer a [public Slack channel](https://join.slack.com/share/enQtMTA2ODc5MzU5NjYxNzktY2FjMjg5Y2NhNTJmMzExODIyNzkxNTZiMGYzZGVmOTY1ZDEyMWZiZTRjN2U1YTNlNjkxN2YyZDdlNzFmMGRiZQ) for discussions and questions around OpenFold3.
 
 ## Citing this Work
 
@@ -102,7 +110,7 @@ If you use OpenFold3-preview in your research, please cite the following:
   title = {OpenFold3-preview},
   author = {{The OpenFold3 Team}},
   year = {2025},
-  version = {0.1.0},
+  version = {0.2.0},
   doi = {10.5281/zenodo.17485510},
   url = {https://github.com/aqlaboratory/openfold-3},
   abstract = {OpenFold3-preview is a biomolecular structure prediction model aiming to be a bitwise reproduction of DeepMind's AlphaFold3, developed by the AlQuraishi Lab at Columbia University and the OpenFold consortium.}
