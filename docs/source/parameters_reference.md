@@ -14,10 +14,6 @@ The list of parameters available with OpenFold3 are as follows
   - **`of3-p2-155k.pt`**
   - **`>=0.4.0`**
   - **155,000**
-* - openfold3-p2-145k
-  - `of3-p2-145k.pt`
-  - `>=0.4.0`
-  - 145,000 
 * - openfold3-p1 _(deprecated)_
   - `of3_ft3_v1.pt`
   - `<0.4.0`
