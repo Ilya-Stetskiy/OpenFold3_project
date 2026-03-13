@@ -422,7 +422,7 @@ def mol_from_pdbeccdutils_component(
         mol.RemoveConformer(1)
     else:
         # Get PDB ID of the structure that model coordinates are taken from
-        model_pdb_id = cif_block.find_value("pdbx_model_coordinates_db_code")
+        model_pdb_id = cif_block.find_value("_chem_comp.pdbx_model_coordinates_db_code")
         if model_pdb_id is None:
             model_pdb_id = "?"
         mol.SetProp("model_pdb_id", model_pdb_id)
