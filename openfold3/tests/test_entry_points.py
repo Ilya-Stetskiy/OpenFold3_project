@@ -699,7 +699,7 @@ class TestRemoveQuerySetDuplicates:
 
 
 class TestSetupOpenFold:
-    def test_fresh_parameter_download(self, tmp_path):
+    def test_fresh_parameter_default_download(self, tmp_path):
         inputs = iter(
             [
                 str(tmp_path),  # Set cache directory
@@ -726,3 +726,33 @@ class TestSetupOpenFold:
             tmp_path
             / OPENFOLD_MODEL_CHECKPOINT_REGISTRY[DEFAULT_CHECKPOINT_NAME].file_name
         ).exists()
+
+    def test_fresh_parameter_download_all(self, tmp_path):
+        inputs = iter(
+            [
+                str(tmp_path),  # Set cache directory
+                "",  # Use default (cache) directory for params directory
+                "2",  # download choice: all parameters
+                "no",  # skip integration tests
+            ]
+        )
+
+        with (
+            patch("builtins.input", side_effect=inputs),
+            patch(
+                "openfold3.setup_openfold.download_s3_file",
+                side_effect=_fake_download_s3_file,
+            ),
+        ):
+            setup_openfold.main()
+        
+        # Check that the checkpoint root file exists and has the expected path
+        assert (tmp_path / CHECKPOINT_ROOT_FILENAME).exists()
+        assert (tmp_path / CHECKPOINT_ROOT_FILENAME).read_text() == str(tmp_path)
+
+        expected_checkpoints = ["openfold3-p2-145k", "openfold3-p2-155k"]
+        for ckpt_name in expected_checkpoints:
+            assert (
+                tmp_path
+                / OPENFOLD_MODEL_CHECKPOINT_REGISTRY[ckpt_name].file_name
+            ).exists()
