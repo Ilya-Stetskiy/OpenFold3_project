@@ -298,7 +298,7 @@ class ExperimentRunner(ABC):
         else:
             raise ValueError(
                 f"""Invalid mode argument: {self.mode}. Choose one of "
-                "'train', 'test', 'predict', 'profile'."""
+                "'train', 'test', 'predict', 'eval'."""
             )
 
         return target_method(
@@ -536,7 +536,7 @@ class TrainingExperimentRunner(ExperimentRunner):
 
 
 class InferenceExperimentRunner(ExperimentRunner):
-    """Training experiment builder."""
+    """Inference experiment builder."""
 
     def __init__(
         self,
