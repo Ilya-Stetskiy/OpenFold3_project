@@ -47,7 +47,7 @@ pip install openfold3
 setup_openfold
 ```
 
-3. Run your first prediction using the ColabFold MSA server with the `run_openfold` binary
+3. Run your first prediction using the ColabFold MSA server with the `run_openfold` binary. It may also be necessary to [configure your environment variables](https://openfold-3.readthedocs.io/en/latest/Installation.html#environment-variables) depending on your system.  
 
 ```bash
 run_openfold predict --query_json=examples/example_inference_inputs/query_ubiquitin.json
