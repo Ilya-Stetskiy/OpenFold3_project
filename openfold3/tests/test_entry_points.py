@@ -316,6 +316,14 @@ class TestModelUpdate:
         # test existing setting in experiment runner is not overwritten
         assert not model_cfg.settings.memory.eval.use_lma
 
+    def test_model_update_with_pae_enabled_triggers_warning(self):
+        with patch(
+            "openfold3.projects.of3_all_atom.project_entry.logger"
+        ) as mock_logger:
+            ModelUpdate.model_validate({"presets": ["predict", "pae_enabled"]})
+        warning_messages = [call.args[0] for call in mock_logger.warning.call_args_list]
+        assert any("model preset is deprecated" in msg for msg in warning_messages)
+
 
 class DummyWandbExperiment:
     def __init__(self, directory):

@@ -18,18 +18,31 @@ import logging
 from dataclasses import dataclass
 
 from ml_collections import ConfigDict
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from pydantic import ConfigDict as PydanticConfigDict
 
 from openfold3.core.config.config_utils import load_yaml
 from openfold3.projects.of3_all_atom.config.model_config import model_config
 from openfold3.projects.of3_all_atom.runner import OpenFold3AllAtom
 
+logger = logging.getLogger(__name__)
+
 
 class ModelUpdate(BaseModel):
     model_config = PydanticConfigDict(extra="forbid")
     presets: list[str] = []
     custom: dict = {}
+
+    @field_validator("presets", mode="before")
+    def warn_if_pae_enabled_included(cls, v):
+        if "pae_enabled" in v:
+            logger.warning(
+                "The `pae_enabled` model preset is deprecated and will be removed."
+                " from the ModelUpdate.presets list. Please remove `pae_enabled`"
+                " from your model update section"
+            )
+            v.remove("pae_enabled")
+        return v
 
 
 @dataclass
