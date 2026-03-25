@@ -271,6 +271,18 @@ output_writer_settings:
 
 ---
 
+#### ⏩ Skip full confidence model outputs
+OpenFold3 writes both aggregated confidence scores and full, per-atom confidence scores. See [Prediction Outputs](41-prediction-outputs) for more information.
+
+For large inference jobs, especially jobs with many seeds, it is useful to skip the full confidence score generation to save disk space. This can be done with the following settings
+
+```yaml
+output_writer_settings:
+  write_full_confidence_scores: False 
+```
+
+---
+
 (inference-low-memory-mode)=
 #### 🧠 Low Memory Mode
 To run inference on larger queries to run on limited memory, add the following to apply the [model presets](https://github.com/aqlaboratory/openfold-3/blob/main/openfold3/projects/of3_all_atom/config/model_setting_presets.yml) to run in low memory mode.
@@ -332,6 +344,7 @@ msa_computation_settings:
 
 In the inference pipeline, we generate a dedicated output directory for each query, named by the corresponding query key (e.g., `query_1` or `3hfm`, if the PDB ID is provided). Each such directory will contain prediction results, MSAs, and intermediate files for MSA and template processing:
 
+(41-prediction-outputs)=
 ### 4.1 Prediction Outputs (`query/seed/`)
 
 Each seed produces `l` (number of diffusion samples) structure predictions, and their associated confidence scores, stored in subdirectories named after the query, seed and the index of the diffusion sample, e.g.:
