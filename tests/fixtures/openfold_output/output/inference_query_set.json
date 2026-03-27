@@ -1,0 +1,19 @@
+{
+  "queries": {
+    "complex_AB": {
+      "query_name": "complex_AB",
+      "chains": [
+        {
+          "molecule_type": "PROTEIN",
+          "chain_ids": ["A"],
+          "sequence": "MSSSSWLL"
+        },
+        {
+          "molecule_type": "PROTEIN",
+          "chain_ids": ["B"],
+          "sequence": "MFVFLVLL"
+        }
+      ]
+    }
+  }
+}
