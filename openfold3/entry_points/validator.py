@@ -113,6 +113,12 @@ class DataModuleArgs(BaseModel):
     data_seed: int | None = None
     num_workers: int = 10
     num_workers_validation: int = 4
+    predict_num_workers: int | None = None
+    persistent_workers: bool = False
+    predict_persistent_workers: bool | None = None
+    prefetch_factor: int | None = None
+    predict_prefetch_factor: int | None = None
+    pin_memory: bool = False
     epoch_len: int = 4
 
 
@@ -162,7 +168,8 @@ class OutputWritingSettings(BaseModel):
     full_confidence_output_format: Literal["json", "npz"] = "json"
     write_features: bool = False
     write_latent_outputs: bool = False
-    write_full_confidence_scores: bool = True
+    metrics_only: bool = False
+    summary_filename: str = "summary.jsonl"
 
 
 class ExperimentSettings(BaseModel):
@@ -377,7 +384,7 @@ class InferenceExperimentConfig(ExperimentConfig):
     cache_path: Path | None = None
 
     experiment_settings: InferenceExperimentSettings = InferenceExperimentSettings()
-    model_update: ModelUpdate = ModelUpdate(presets=["predict"])
+    model_update: ModelUpdate = ModelUpdate(presets=["predict", "pae_enabled"])
     data_module_args: DataModuleArgs = DataModuleArgs()
     dataset_config_kwargs: InferenceDatasetConfigKwargs = InferenceDatasetConfigKwargs()
     output_writer_settings: OutputWritingSettings = OutputWritingSettings()
@@ -487,7 +494,7 @@ class InferenceExperimentConfig(ExperimentConfig):
             if self.template_preprocessor_settings.ccd_file_path is not None:
                 warnings.warn(
                     "Overwriting ccd_file_path in template_preprocessor_settings with "
-                    "dataset_config_kwargs.ccd_file_path. We recommend specifying "
+                    "dataset_config_kwargs.ccd_file_path. We recommend specifying"
                     "ccd_file_path only in dataset_config_kwargs.",
                     stacklevel=2,
                 )

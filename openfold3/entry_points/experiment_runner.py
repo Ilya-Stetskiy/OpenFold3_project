@@ -298,7 +298,7 @@ class ExperimentRunner(ABC):
         else:
             raise ValueError(
                 f"""Invalid mode argument: {self.mode}. Choose one of "
-                "'train', 'test', 'predict', 'eval'."""
+                "'train', 'test', 'predict', 'profile'."""
             )
 
         return target_method(
@@ -536,7 +536,7 @@ class TrainingExperimentRunner(ExperimentRunner):
 
 
 class InferenceExperimentRunner(ExperimentRunner):
-    """Inference experiment builder."""
+    """Training experiment builder."""
 
     def __init__(
         self,
@@ -614,26 +614,37 @@ class InferenceExperimentRunner(ExperimentRunner):
     def use_templates(self) -> bool:
         return self.experiment_config.experiment_settings.use_templates
 
+    @cached_property
+    def pae_enabled(self) -> bool:
+        return self.model_config.architecture.heads.pae.enabled
+
     def remove_completed_queries_from_query_set(self, inference_query_set):
         """Returns a new inference query set with previously completed runs removed."""
 
         completed_structures = []
         structure_format = self.output_writer_settings.structure_format
+        metrics_only = self.output_writer_settings.metrics_only
 
         for query_id in inference_query_set.queries:
-            ## a structure must be present for all seeds and all diffusion samples
-            ## to count as completed
-            structure_exists = True
+            # All expected outputs for every seed/sample must be present to count as
+            # completed. In metrics_only mode, aggregated metrics are the completion
+            # marker instead of structure files.
+            query_completed = True
             for seed in self.seeds:
                 output_subdir = self.output_dir / query_id / f"seed_{seed}"
                 for s in range(self.num_diffusion_samples):
                     file_prefix = (
                         output_subdir / f"{query_id}_seed_{seed}_sample_{s + 1}"
                     )
-                    structure_file = Path(f"{file_prefix}_model.{structure_format}")
-                    structure_exists = structure_file.exists() and structure_exists
+                    if metrics_only:
+                        completed_file = Path(
+                            f"{file_prefix}_confidences_aggregated.json"
+                        )
+                    else:
+                        completed_file = Path(f"{file_prefix}_model.{structure_format}")
+                    query_completed = completed_file.exists() and query_completed
 
-            if structure_exists:
+            if query_completed:
                 completed_structures.append(query_id)
 
         logger.info(
@@ -705,6 +716,7 @@ class InferenceExperimentRunner(ExperimentRunner):
         _callbacks = [
             OF3OutputWriter(
                 output_dir=self.output_dir,
+                pae_enabled=self.pae_enabled,
                 **self.output_writer_settings.model_dump(),
             ),
             PredictTimer(self.output_dir),

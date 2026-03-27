@@ -153,6 +153,12 @@ class DataModuleConfig(BaseModel):
     batch_size: int = 1
     num_workers: int = 0
     num_workers_validation: int = 0
+    predict_num_workers: int | None = None
+    persistent_workers: bool = False
+    predict_persistent_workers: bool | None = None
+    prefetch_factor: int | None = None
+    predict_prefetch_factor: int | None = None
+    pin_memory: bool = False
     data_seed: int = 42
     epoch_len: int = 1
 
@@ -167,6 +173,14 @@ class DataModule(pl.LightningDataModule):
         self.batch_size = data_module_config.batch_size
         self.num_workers = data_module_config.num_workers
         self.num_workers_validation = data_module_config.num_workers_validation
+        self.predict_num_workers = data_module_config.predict_num_workers
+        self.persistent_workers = data_module_config.persistent_workers
+        self.predict_persistent_workers = (
+            data_module_config.predict_persistent_workers
+        )
+        self.prefetch_factor = data_module_config.prefetch_factor
+        self.predict_prefetch_factor = data_module_config.predict_prefetch_factor
+        self.pin_memory = data_module_config.pin_memory
         self.data_seed = data_module_config.data_seed
         self.next_data_seed = data_module_config.data_seed
         self.epoch_len = data_module_config.epoch_len
@@ -417,8 +431,21 @@ class DataModule(pl.LightningDataModule):
             and DatasetMode.train in self.multi_dataset_config.modes
         ):
             num_workers = self.num_workers_validation
+        elif mode == DatasetMode.prediction and self.predict_num_workers is not None:
+            num_workers = self.predict_num_workers
         else:
             num_workers = self.num_workers
+
+        if mode == DatasetMode.prediction:
+            persistent_workers = self.predict_persistent_workers
+            if persistent_workers is None:
+                persistent_workers = self.persistent_workers
+            prefetch_factor = self.predict_prefetch_factor
+            if prefetch_factor is None:
+                prefetch_factor = self.prefetch_factor
+        else:
+            persistent_workers = self.persistent_workers
+            prefetch_factor = self.prefetch_factor
 
         generator = self.generators.get(mode)
         if generator is None:
@@ -437,14 +464,23 @@ class DataModule(pl.LightningDataModule):
             f"Creating {mode} dataloader: num_workers={num_workers}, "
             f"rank={self.global_rank}."
         )
+        dataloader_kwargs = {
+            "dataset": self.datasets_by_mode[mode],
+            "batch_size": self.batch_size,
+            "sampler": sampler,
+            "num_workers": num_workers,
+            "collate_fn": openfold_batch_collator,
+            "generator": self.generators[mode],
+            "worker_init_fn": worker_init_fn,
+            "pin_memory": self.pin_memory,
+        }
+        if num_workers > 0:
+            dataloader_kwargs["persistent_workers"] = persistent_workers
+            if prefetch_factor is not None:
+                dataloader_kwargs["prefetch_factor"] = prefetch_factor
+
         return DataLoader(
-            dataset=self.datasets_by_mode[mode],
-            batch_size=self.batch_size,
-            sampler=sampler,
-            num_workers=num_workers,
-            collate_fn=openfold_batch_collator,
-            generator=self.generators[mode],
-            worker_init_fn=worker_init_fn,
+            **dataloader_kwargs,
         )
 
     def train_dataloader(self) -> DataLoader:

@@ -257,5 +257,33 @@ def align_msa_server(
         fp.write(query_set.model_dump_json(indent=4))
 
 
+@cli.command(name="screen-mutations")
+@click.option(
+    "--screening-job-json",
+    "--screening_job_json",
+    type=click.Path(exists=True, file_okay=True, dir_okay=False, path_type=Path),
+    required=True,
+    help="Json containing a mutation-screening job definition.",
+)
+@click.option(
+    "--output-dir",
+    "--output_dir",
+    type=click.Path(exists=False, file_okay=False, dir_okay=True, path_type=Path),
+    required=False,
+    help="Optional override for the screening output directory.",
+)
+def screen_mutations(
+    screening_job_json: Path,
+    output_dir: Path | None = None,
+):
+    """Run high-throughput mutation screening with cached metrics-only outputs."""
+    _torch_gpu_setup()
+
+    from openfold3.mutation_runner import run_screening_job_from_json
+
+    logging.basicConfig(level=logging.INFO)
+    run_screening_job_from_json(screening_job_json, output_dir=output_dir)
+
+
 if __name__ == "__main__":
     cli()

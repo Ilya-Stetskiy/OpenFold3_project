@@ -17,6 +17,7 @@
 import json
 import logging
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import torch
@@ -73,25 +74,46 @@ class OF3OutputWriter(BasePredictionWriter):
     def __init__(
         self,
         output_dir: Path,
+        pae_enabled: bool = False,
         structure_format: str = "pdb",
         full_confidence_output_format: str = "json",
         write_features: bool = False,
         write_latent_outputs: bool = False,
-        write_full_confidence_scores: bool = True,
+        metrics_only: bool = False,
+        summary_filename: str = "summary.jsonl",
     ):
         super().__init__(write_interval="batch")
         self.output_dir = output_dir
+        self.pae_enabled = pae_enabled
         self.structure_format = structure_format
         self.full_confidence_format = full_confidence_output_format
         self.write_features = write_features
         self.write_latent_outputs = write_latent_outputs
-        self.write_full_confidence_scores = write_full_confidence_scores
+        self.metrics_only = metrics_only
+        self.summary_path = self.output_dir / summary_filename
 
         # Track successfully predicted samples
         self.success_count = 0
         self.failed_count = 0
         self.total_count = 0
         self.failed_queries = []
+
+    @staticmethod
+    def _to_jsonable(value: Any):
+        if isinstance(value, np.ndarray):
+            return value.tolist()
+        if isinstance(value, np.generic):
+            return value.item()
+        if isinstance(value, dict):
+            return {k: OF3OutputWriter._to_jsonable(v) for k, v in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [OF3OutputWriter._to_jsonable(v) for v in value]
+        return value
+
+    def append_summary_row(self, row: dict[str, Any]) -> None:
+        self.summary_path.parent.mkdir(parents=True, exist_ok=True)
+        with self.summary_path.open("a", encoding="utf-8") as fp:
+            fp.write(json.dumps(self._to_jsonable(row), cls=NumpyEncoder) + "\n")
 
     @staticmethod
     def write_structure_prediction(
@@ -179,13 +201,13 @@ class OF3OutputWriter(BasePredictionWriter):
         plddt = confidence_scores["plddt"]
         pde = confidence_scores["pde"]
         gpde = confidence_scores["gpde"]
-        pae = confidence_scores["pae"]
         aggregated_confidence_scores = {"avg_plddt": np.mean(plddt), "gpde": gpde}
 
-        logger.info("Recording PAE confidence outputs")
-        aggregated_confidence_scores |= self.get_pae_confidence_scores(
-            confidence_scores, atom_array
-        )
+        if self.pae_enabled:
+            logger.info("Recording PAE confidence outputs")
+            aggregated_confidence_scores |= self.get_pae_confidence_scores(
+                confidence_scores, atom_array
+            )
 
         out_file_agg = Path(f"{output_prefix}_confidences_aggregated.json")
         out_file_agg.write_text(
@@ -193,11 +215,11 @@ class OF3OutputWriter(BasePredictionWriter):
         )
 
         # Full confidence scores
-        if self.write_full_confidence_scores is True:
-            full_confidence_scores = {"plddt": plddt, "pde": pde, "pae": pae}
-            out_fmt = self.full_confidence_format
-            out_file_full = Path(f"{output_prefix}_confidences.{out_fmt}")
+        full_confidence_scores = {"plddt": plddt, "pde": pde}
+        out_fmt = self.full_confidence_format
+        out_file_full = Path(f"{output_prefix}_confidences.{out_fmt}")
 
+        if not self.metrics_only:
             if out_fmt == "json":
                 out_file_full.write_text(
                     json.dumps(
@@ -208,6 +230,8 @@ class OF3OutputWriter(BasePredictionWriter):
                 )
             elif out_fmt == "npz":
                 np.savez_compressed(out_file_full, **full_confidence_scores)
+
+        return self._to_jsonable(aggregated_confidence_scores)
 
     def write_all_outputs(self, batch: dict, outputs: dict, confidence_scores: dict):
         """Writes all outputs for a given batch."""
@@ -237,20 +261,34 @@ class OF3OutputWriter(BasePredictionWriter):
                 confidence_scores_sample = _take_sample_dim(confidence_scores_batch, s)
                 predicted_coords_sample = predicted_coords_batch[s]
 
-                # Save predicted structure
                 structure_file = Path(f"{file_prefix}_model.{self.structure_format}")
-                self.write_structure_prediction(
-                    atom_array=atom_array_batch,
-                    predicted_coords=predicted_coords_sample,
-                    plddt=confidence_scores_sample["plddt"],
-                    output_file=structure_file,
-                )
+                if not self.metrics_only:
+                    # Save predicted structure
+                    self.write_structure_prediction(
+                        atom_array=atom_array_batch,
+                        predicted_coords=predicted_coords_sample,
+                        plddt=confidence_scores_sample["plddt"],
+                        output_file=structure_file,
+                    )
 
                 # Save confidence metrics
-                self.write_confidence_scores(
+                aggregated_scores = self.write_confidence_scores(
                     confidence_scores=confidence_scores_sample,
                     output_prefix=file_prefix,
                     atom_array=atom_array_batch,
+                )
+                self.append_summary_row(
+                    {
+                        "query_id": query_id,
+                        "mutation_id": query_id,
+                        "seed": int(seed),
+                        "sample_index": s + 1,
+                        "aggregated_confidence_path": str(
+                            Path(f"{file_prefix}_confidences_aggregated.json")
+                        ),
+                        "derived_interface_metrics": {},
+                        **aggregated_scores,
+                    }
                 )
 
             def fetch_cur_batch(t):
@@ -265,14 +303,14 @@ class OF3OutputWriter(BasePredictionWriter):
             file_prefix = output_subdir / f"{query_id}_seed_{seed}"
 
             # Write out input feature dictionary
-            if self.write_features:
+            if self.write_features and not self.metrics_only:
                 out_file = Path(f"{file_prefix}_batch.pt")
                 cur_batch = tensor_tree_map(fetch_cur_batch, batch, strict_type=False)
                 torch.save(cur_batch, out_file)
                 del cur_batch
 
             # Write out latent reps / raw model outputs
-            if self.write_latent_outputs:
+            if self.write_latent_outputs and not self.metrics_only:
                 out_file = Path(f"{file_prefix}_latent_output.pt")
                 cur_output = tensor_tree_map(
                     fetch_cur_batch, outputs, strict_type=False

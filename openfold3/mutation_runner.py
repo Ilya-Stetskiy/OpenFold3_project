@@ -1,0 +1,615 @@
+# Copyright 2026 AlQuraishi Laboratory
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""Mutation-screening orchestration layer for OpenFold3."""
+
+from __future__ import annotations
+
+import csv
+import hashlib
+import json
+import logging
+import queue
+import subprocess
+import sys
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import asdict, dataclass, field
+from pathlib import Path
+from typing import Any, Protocol
+
+import yaml
+
+from openfold3.projects.of3_all_atom.config.inference_query_format import (
+    Chain,
+    InferenceQuerySet,
+    Query,
+)
+
+logger = logging.getLogger(__name__)
+
+CANONICAL_AA = tuple("ACDEFGHIKLMNPQRSTVWY")
+
+
+def _stable_json_dumps(value: Any) -> str:
+    return json.dumps(value, indent=2, sort_keys=True)
+
+
+def _hash_payload(payload: Any) -> str:
+    return hashlib.sha256(_stable_json_dumps(payload).encode("utf-8")).hexdigest()
+
+
+def sequence_hash(sequence: str) -> str:
+    return hashlib.sha256(sequence.encode("utf-8")).hexdigest()
+
+
+def _json_default(value: Any):
+    if isinstance(value, Path):
+        return str(value)
+    raise TypeError(f"Object of type {type(value)!r} is not JSON serializable")
+
+
+def apply_point_mutation(
+    sequence: str,
+    position_1based: int,
+    new_residue: str,
+    expected_residue: str | None = None,
+) -> str:
+    if not sequence:
+        raise ValueError("sequence must be non-empty")
+    if position_1based < 1 or position_1based > len(sequence):
+        raise ValueError(
+            f"position_1based={position_1based} is out of bounds for sequence length"
+            f" {len(sequence)}"
+        )
+    new_residue = new_residue.upper()
+    if new_residue not in CANONICAL_AA:
+        raise ValueError(f"new_residue must be canonical amino acid, got {new_residue}")
+
+    position = position_1based - 1
+    current = sequence[position]
+    if expected_residue is not None and current != expected_residue.upper():
+        raise ValueError(
+            f"Expected residue {expected_residue.upper()} at position"
+            f" {position_1based}, found {current}"
+        )
+    if current == new_residue:
+        return sequence
+    return sequence[:position] + new_residue + sequence[position + 1 :]
+
+
+@dataclass(frozen=True)
+class MutationSpec:
+    chain_id: str
+    position_1based: int
+    from_residue: str
+    to_residue: str
+
+    @property
+    def mutation_id(self) -> str:
+        return (
+            f"{self.chain_id}_{self.from_residue.upper()}"
+            f"{self.position_1based}{self.to_residue.upper()}"
+        )
+
+
+@dataclass
+class ScreeningResultRow:
+    mutation_id: str
+    query_id: str
+    query_hash: str
+    sample_index: int | None
+    seed: int | None
+    sample_ranking_score: float | None
+    iptm: float | None
+    ptm: float | None
+    avg_plddt: float | None
+    gpde: float | None
+    has_clash: float | None
+    cache_hit: bool
+    sequence_cache_hits: int
+    query_result_cache_hit: bool
+    cpu_prep_seconds: float
+    gpu_inference_seconds: float
+    total_seconds: float
+    output_dir: str
+    aggregated_confidence_path: str | None = None
+    mutation_spec: dict[str, Any] | None = None
+    derived_interface_metrics: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class ScreeningJob:
+    base_query: Query
+    mutations: list[MutationSpec]
+    output_dir: Path
+    cache_dir: Path
+    query_prefix: str = "screen"
+    include_wt: bool = True
+    run_baseline_first: bool = True
+    msa_policy: str = "reuse_precomputed"
+    template_policy: str = "reuse_precomputed"
+    output_policy: str = "metrics_only"
+    resume: bool = True
+    num_cpu_workers: int = 4
+    max_inflight_queries: int = 4
+    num_diffusion_samples: int | None = None
+    num_model_seeds: int | None = None
+    runner_yaml: Path | None = None
+    inference_ckpt_path: Path | None = None
+    inference_ckpt_name: str | None = None
+    use_msa_server: bool = False
+    use_templates: bool = False
+
+    @classmethod
+    def from_json_file(cls, path: Path) -> "ScreeningJob":
+        data = json.loads(path.read_text(encoding="utf-8"))
+        base_query = Query.model_validate(data["base_query"])
+        mutations = [MutationSpec(**item) for item in data["mutations"]]
+        data["base_query"] = base_query
+        data["mutations"] = mutations
+        data["output_dir"] = Path(data["output_dir"])
+        data["cache_dir"] = Path(data["cache_dir"])
+        if data.get("runner_yaml") is not None:
+            data["runner_yaml"] = Path(data["runner_yaml"])
+        if data.get("inference_ckpt_path") is not None:
+            data["inference_ckpt_path"] = Path(data["inference_ckpt_path"])
+        return cls(**data)
+
+
+@dataclass
+class PreparedMutationJob:
+    mutation_id: str
+    mutation_spec: MutationSpec | None
+    query_id: str
+    query_hash: str
+    payload_path: Path
+    output_dir: Path
+    cache_hit: bool
+    sequence_cache_hits: int
+    cpu_prep_seconds: float
+
+
+class PredictBackend(Protocol):
+    def run(self, prepared_job: PreparedMutationJob) -> ScreeningResultRow: ...
+
+
+class SequenceArtifactCache:
+    def __init__(self, root: Path):
+        self.root = root
+        self.root.mkdir(parents=True, exist_ok=True)
+        self.index_path = self.root / "sequence_index.json"
+        if self.index_path.exists():
+            self.index = json.loads(self.index_path.read_text(encoding="utf-8"))
+        else:
+            self.index = {}
+        self._lock = threading.Lock()
+
+    def _persist(self) -> None:
+        self.index_path.write_text(
+            json.dumps(self.index, indent=2, sort_keys=True), encoding="utf-8"
+        )
+
+    def register_chain(self, chain: Chain) -> None:
+        if chain.sequence is None:
+            return
+        payload = {}
+        if chain.main_msa_file_paths:
+            payload["main_msa_file_paths"] = [str(p) for p in chain.main_msa_file_paths]
+        if chain.paired_msa_file_paths:
+            payload["paired_msa_file_paths"] = [
+                str(p) for p in chain.paired_msa_file_paths
+            ]
+        if chain.template_alignment_file_path:
+            payload["template_alignment_file_path"] = str(
+                chain.template_alignment_file_path
+            )
+        if chain.template_entry_chain_ids:
+            payload["template_entry_chain_ids"] = list(chain.template_entry_chain_ids)
+        if not payload:
+            return
+
+        seq_key = sequence_hash(chain.sequence)
+        with self._lock:
+            self.index[seq_key] = payload
+            self._persist()
+
+    def resolve_chain(self, chain: Chain) -> bool:
+        if chain.sequence is None:
+            return False
+        seq_key = sequence_hash(chain.sequence)
+        entry = self.index.get(seq_key)
+        if entry is None:
+            return False
+
+        hit = False
+        if not chain.main_msa_file_paths and entry.get("main_msa_file_paths"):
+            chain.main_msa_file_paths = [Path(p) for p in entry["main_msa_file_paths"]]
+            hit = True
+        if not chain.paired_msa_file_paths and entry.get("paired_msa_file_paths"):
+            chain.paired_msa_file_paths = [
+                Path(p) for p in entry["paired_msa_file_paths"]
+            ]
+            hit = True
+        if (
+            chain.template_alignment_file_path is None
+            and entry.get("template_alignment_file_path") is not None
+        ):
+            chain.template_alignment_file_path = Path(
+                entry["template_alignment_file_path"]
+            )
+            hit = True
+        if (
+            not chain.template_entry_chain_ids
+            and entry.get("template_entry_chain_ids") is not None
+        ):
+            chain.template_entry_chain_ids = list(entry["template_entry_chain_ids"])
+            hit = True
+        return hit
+
+
+class QueryResultCache:
+    def __init__(self, root: Path):
+        self.root = root
+        self.root.mkdir(parents=True, exist_ok=True)
+
+    def _path_for(self, query_hash: str) -> Path:
+        return self.root / f"{query_hash}.json"
+
+    def load(self, query_hash: str) -> ScreeningResultRow | None:
+        path = self._path_for(query_hash)
+        if not path.exists():
+            return None
+        return ScreeningResultRow(**json.loads(path.read_text(encoding="utf-8")))
+
+    def store(self, row: ScreeningResultRow) -> None:
+        path = self._path_for(row.query_hash)
+        path.write_text(
+            json.dumps(asdict(row), indent=2, default=_json_default),
+            encoding="utf-8",
+        )
+
+
+class SubprocessOpenFoldBackend:
+    def __init__(self, job: ScreeningJob):
+        self.job = job
+
+    def _runner_yaml_for_job(self, prepared_job: PreparedMutationJob) -> Path:
+        config = {}
+        if self.job.runner_yaml is not None:
+            config = yaml.safe_load(self.job.runner_yaml.read_text(encoding="utf-8")) or {}
+
+        output_settings = config.setdefault("output_writer_settings", {})
+        output_settings["metrics_only"] = self.job.output_policy == "metrics_only"
+        output_settings.setdefault("summary_filename", "summary.jsonl")
+
+        data_module_args = config.setdefault("data_module_args", {})
+        data_module_args.setdefault("predict_num_workers", self.job.num_cpu_workers)
+        data_module_args.setdefault("persistent_workers", True)
+        data_module_args.setdefault("predict_persistent_workers", True)
+        data_module_args.setdefault("pin_memory", True)
+
+        experiment_settings = config.setdefault("experiment_settings", {})
+        experiment_settings.setdefault("skip_existing", self.job.resume)
+
+        yaml_path = prepared_job.output_dir / "runner.override.yml"
+        yaml_path.parent.mkdir(parents=True, exist_ok=True)
+        yaml_path.write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
+        return yaml_path
+
+    def _parse_best_summary_row(self, summary_path: Path, query_id: str) -> dict[str, Any]:
+        rows = []
+        for line in summary_path.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            row = json.loads(line)
+            if row.get("query_id") == query_id:
+                rows.append(row)
+        if not rows:
+            raise RuntimeError(f"No summary rows found for query_id={query_id}")
+
+        def sort_key(item: dict[str, Any]):
+            return (
+                item.get("sample_ranking_score") is not None,
+                item.get("sample_ranking_score") or float("-inf"),
+                item.get("iptm") or float("-inf"),
+                item.get("ptm") or float("-inf"),
+                item.get("avg_plddt") or float("-inf"),
+                -(item.get("gpde") or float("inf")),
+            )
+
+        return max(rows, key=sort_key)
+
+    def run(self, prepared_job: PreparedMutationJob) -> ScreeningResultRow:
+        start = time.perf_counter()
+        runner_yaml = self._runner_yaml_for_job(prepared_job)
+        cmd = [
+            sys.executable,
+            "-m",
+            "openfold3.run_openfold",
+            "predict",
+            "--query_json",
+            str(prepared_job.payload_path),
+            "--output_dir",
+            str(prepared_job.output_dir),
+            "--use_msa_server",
+            str(self.job.use_msa_server).lower(),
+            "--use_templates",
+            str(self.job.use_templates).lower(),
+            "--runner_yaml",
+            str(runner_yaml),
+        ]
+
+        if self.job.num_diffusion_samples is not None:
+            cmd += ["--num_diffusion_samples", str(self.job.num_diffusion_samples)]
+        if self.job.num_model_seeds is not None:
+            cmd += ["--num_model_seeds", str(self.job.num_model_seeds)]
+        if self.job.inference_ckpt_path is not None:
+            cmd += ["--inference_ckpt_path", str(self.job.inference_ckpt_path)]
+        if self.job.inference_ckpt_name is not None:
+            cmd += ["--inference_ckpt_name", self.job.inference_ckpt_name]
+
+        subprocess.run(cmd, check=True)
+        gpu_seconds = time.perf_counter() - start
+
+        summary_path = prepared_job.output_dir / "summary.jsonl"
+        best = self._parse_best_summary_row(summary_path, prepared_job.query_id)
+
+        return ScreeningResultRow(
+            mutation_id=prepared_job.mutation_id,
+            query_id=prepared_job.query_id,
+            query_hash=prepared_job.query_hash,
+            sample_index=best.get("sample_index"),
+            seed=best.get("seed"),
+            sample_ranking_score=best.get("sample_ranking_score"),
+            iptm=best.get("iptm"),
+            ptm=best.get("ptm"),
+            avg_plddt=best.get("avg_plddt"),
+            gpde=best.get("gpde"),
+            has_clash=best.get("has_clash"),
+            cache_hit=prepared_job.cache_hit,
+            sequence_cache_hits=prepared_job.sequence_cache_hits,
+            query_result_cache_hit=False,
+            cpu_prep_seconds=prepared_job.cpu_prep_seconds,
+            gpu_inference_seconds=gpu_seconds,
+            total_seconds=prepared_job.cpu_prep_seconds + gpu_seconds,
+            output_dir=str(prepared_job.output_dir),
+            aggregated_confidence_path=best.get("aggregated_confidence_path"),
+            mutation_spec=(
+                asdict(prepared_job.mutation_spec)
+                if prepared_job.mutation_spec is not None
+                else None
+            ),
+            derived_interface_metrics=best.get("derived_interface_metrics", {}),
+        )
+
+
+class MutationScreeningRunner:
+    def __init__(self, backend: PredictBackend | None = None):
+        self.backend = backend
+
+    @staticmethod
+    def _clone_query(query: Query) -> Query:
+        return Query.model_validate(query.model_dump())
+
+    def _register_base_chain_cache(
+        self, base_query: Query, sequence_cache: SequenceArtifactCache
+    ) -> None:
+        for chain in base_query.chains:
+            sequence_cache.register_chain(chain)
+
+    def _apply_mutation(self, query: Query, mutation: MutationSpec) -> None:
+        for chain in query.chains:
+            if mutation.chain_id in chain.chain_ids and chain.sequence is not None:
+                chain.sequence = apply_point_mutation(
+                    chain.sequence,
+                    mutation.position_1based,
+                    mutation.to_residue,
+                    expected_residue=mutation.from_residue,
+                )
+                return
+        raise ValueError(f"Could not find mutable protein chain {mutation.chain_id}")
+
+    def _resolve_sequence_cache(
+        self, query: Query, sequence_cache: SequenceArtifactCache
+    ) -> int:
+        hits = 0
+        for chain in query.chains:
+            if sequence_cache.resolve_chain(chain):
+                hits += 1
+            sequence_cache.register_chain(chain)
+        return hits
+
+    def _query_hash(self, query: Query, job: ScreeningJob) -> str:
+        payload = {
+            "query": query.model_dump(mode="json"),
+            "job": {
+                "msa_policy": job.msa_policy,
+                "template_policy": job.template_policy,
+                "output_policy": job.output_policy,
+                "num_diffusion_samples": job.num_diffusion_samples,
+                "num_model_seeds": job.num_model_seeds,
+                "runner_yaml": str(job.runner_yaml) if job.runner_yaml else None,
+                "inference_ckpt_path": (
+                    str(job.inference_ckpt_path) if job.inference_ckpt_path else None
+                ),
+                "inference_ckpt_name": job.inference_ckpt_name,
+                "use_msa_server": job.use_msa_server,
+                "use_templates": job.use_templates,
+            },
+        }
+        return _hash_payload(payload)
+
+    def _write_payload(
+        self, query_id: str, query: Query, query_hash: str, cache_dir: Path
+    ) -> Path:
+        payload_dir = cache_dir / "payloads"
+        payload_dir.mkdir(parents=True, exist_ok=True)
+        payload_path = payload_dir / f"{query_id}_{query_hash}.json"
+        if not payload_path.exists():
+            query_set = InferenceQuerySet(queries={query_id: query})
+            payload_path.write_text(
+                query_set.model_dump_json(indent=2), encoding="utf-8"
+            )
+        return payload_path
+
+    def _prepare_single_job(
+        self,
+        job: ScreeningJob,
+        mutation_spec: MutationSpec | None,
+        sequence_cache: SequenceArtifactCache,
+        result_cache: QueryResultCache,
+    ) -> PreparedMutationJob | ScreeningResultRow:
+        started = time.perf_counter()
+        query = self._clone_query(job.base_query)
+        mutation_id = "WT" if mutation_spec is None else mutation_spec.mutation_id
+        query_id = f"{job.query_prefix}_{mutation_id}"
+
+        if mutation_spec is not None:
+            self._apply_mutation(query, mutation_spec)
+
+        sequence_cache_hits = self._resolve_sequence_cache(query, sequence_cache)
+        query_hash = self._query_hash(query, job)
+
+        if job.resume:
+            cached = result_cache.load(query_hash)
+            if cached is not None:
+                cached.cache_hit = True
+                cached.query_result_cache_hit = True
+                return cached
+
+        payload_path = self._write_payload(query_id, query, query_hash, job.cache_dir)
+        cpu_seconds = time.perf_counter() - started
+        return PreparedMutationJob(
+            mutation_id=mutation_id,
+            mutation_spec=mutation_spec,
+            query_id=query_id,
+            query_hash=query_hash,
+            payload_path=payload_path,
+            output_dir=job.output_dir / "runs" / query_id,
+            cache_hit=sequence_cache_hits > 0,
+            sequence_cache_hits=sequence_cache_hits,
+            cpu_prep_seconds=cpu_seconds,
+        )
+
+    def _entries(self, job: ScreeningJob) -> list[MutationSpec | None]:
+        entries: list[MutationSpec | None] = list(job.mutations)
+        if job.include_wt:
+            if job.run_baseline_first:
+                entries = [None] + entries
+            else:
+                entries = entries + [None]
+        return entries
+
+    def run(self, job: ScreeningJob) -> list[ScreeningResultRow]:
+        job.output_dir.mkdir(parents=True, exist_ok=True)
+        job.cache_dir.mkdir(parents=True, exist_ok=True)
+
+        sequence_cache = SequenceArtifactCache(job.cache_dir / "sequence")
+        result_cache = QueryResultCache(job.cache_dir / "results")
+        self._register_base_chain_cache(job.base_query, sequence_cache)
+
+        backend = self.backend or SubprocessOpenFoldBackend(job)
+        prepared_queue: queue.Queue[PreparedMutationJob | ScreeningResultRow | None] = (
+            queue.Queue(maxsize=max(1, job.max_inflight_queries))
+        )
+        entries = self._entries(job)
+        rows: list[ScreeningResultRow] = []
+
+        def producer() -> None:
+            with ThreadPoolExecutor(max_workers=max(1, job.num_cpu_workers)) as executor:
+                futures = [
+                    executor.submit(
+                        self._prepare_single_job,
+                        job,
+                        mutation_spec,
+                        sequence_cache,
+                        result_cache,
+                    )
+                    for mutation_spec in entries
+                ]
+                for future in futures:
+                    prepared_queue.put(future.result())
+            prepared_queue.put(None)
+
+        producer_thread = threading.Thread(target=producer, daemon=True)
+        producer_thread.start()
+
+        while True:
+            item = prepared_queue.get()
+            if item is None:
+                break
+            if isinstance(item, ScreeningResultRow):
+                rows.append(item)
+                continue
+
+            row = backend.run(item)
+            result_cache.store(row)
+            rows.append(row)
+
+        producer_thread.join()
+        self._write_results(job.output_dir, rows)
+        self._write_manifest(job, rows)
+        return rows
+
+    def _write_results(self, output_dir: Path, rows: list[ScreeningResultRow]) -> None:
+        jsonl_path = output_dir / "results.jsonl"
+        csv_path = output_dir / "results.csv"
+
+        with jsonl_path.open("w", encoding="utf-8") as fp:
+            for row in rows:
+                fp.write(json.dumps(asdict(row), default=_json_default) + "\n")
+
+        if rows:
+            fieldnames = list(asdict(rows[0]).keys())
+            with csv_path.open("w", encoding="utf-8", newline="") as fp:
+                writer = csv.DictWriter(fp, fieldnames=fieldnames)
+                writer.writeheader()
+                for row in rows:
+                    writer.writerow(
+                        {
+                            key: json.dumps(value, default=_json_default)
+                            if isinstance(value, (dict, list))
+                            else value
+                            for key, value in asdict(row).items()
+                        }
+                    )
+
+    def _write_manifest(self, job: ScreeningJob, rows: list[ScreeningResultRow]) -> None:
+        manifest = {
+            "query_prefix": job.query_prefix,
+            "output_policy": job.output_policy,
+            "msa_policy": job.msa_policy,
+            "template_policy": job.template_policy,
+            "num_mutations": len(job.mutations),
+            "include_wt": job.include_wt,
+            "run_baseline_first": job.run_baseline_first,
+            "rows_written": len(rows),
+            "results_jsonl": str(job.output_dir / "results.jsonl"),
+            "results_csv": str(job.output_dir / "results.csv"),
+        }
+        (job.output_dir / "screening_manifest.json").write_text(
+            json.dumps(manifest, indent=2),
+            encoding="utf-8",
+        )
+
+
+def run_screening_job_from_json(
+    screening_job_json: Path, output_dir: Path | None = None
+) -> list[ScreeningResultRow]:
+    job = ScreeningJob.from_json_file(screening_job_json)
+    if output_dir is not None:
+        job.output_dir = output_dir
+    return MutationScreeningRunner().run(job)
