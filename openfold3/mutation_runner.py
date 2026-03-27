@@ -21,6 +21,7 @@ import hashlib
 import json
 import logging
 import queue
+import shutil
 import subprocess
 import sys
 import threading
@@ -128,6 +129,7 @@ class ScreeningResultRow:
     aggregated_confidence_path: str | None = None
     mutation_spec: dict[str, Any] | None = None
     derived_interface_metrics: dict[str, Any] = field(default_factory=dict)
+    query_output_cleaned: bool = False
 
 
 @dataclass
@@ -152,6 +154,9 @@ class ScreeningJob:
     inference_ckpt_name: str | None = None
     use_msa_server: bool = False
     use_templates: bool = False
+    min_free_disk_gb: float = 1.0
+    cleanup_query_outputs: bool = True
+    log_file: Path | None = None
 
     @classmethod
     def from_json_file(cls, path: Path) -> "ScreeningJob":
@@ -166,6 +171,8 @@ class ScreeningJob:
             data["runner_yaml"] = Path(data["runner_yaml"])
         if data.get("inference_ckpt_path") is not None:
             data["inference_ckpt_path"] = Path(data["inference_ckpt_path"])
+        if data.get("log_file") is not None:
+            data["log_file"] = Path(data["log_file"])
         return cls(**data)
 
 
@@ -311,6 +318,10 @@ class SubprocessOpenFoldBackend:
     def __init__(self, job: ScreeningJob):
         self.job = job
 
+    def _cleanup_query_output_dir(self, output_dir: Path) -> None:
+        if output_dir.exists():
+            shutil.rmtree(output_dir, ignore_errors=True)
+
     def _runner_yaml_for_job(self, prepared_job: PreparedMutationJob) -> Path:
         config = {}
         if self.job.runner_yaml is not None:
@@ -386,11 +397,35 @@ class SubprocessOpenFoldBackend:
         if self.job.inference_ckpt_name is not None:
             cmd += ["--inference_ckpt_name", self.job.inference_ckpt_name]
 
-        subprocess.run(cmd, check=True)
+        logger.info(
+            "Launching query %s with output_dir=%s",
+            prepared_job.query_id,
+            prepared_job.output_dir,
+        )
+        process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+        )
+        assert process.stdout is not None
+        for line in process.stdout:
+            logger.info("[predict:%s] %s", prepared_job.query_id, line.rstrip())
+        return_code = process.wait()
+        if return_code != 0:
+            raise subprocess.CalledProcessError(return_code, cmd)
         gpu_seconds = time.perf_counter() - start
 
         summary_path = prepared_job.output_dir / "summary.jsonl"
         best = self._parse_best_summary_row(summary_path, prepared_job.query_id)
+
+        aggregated_confidence_path = best.get("aggregated_confidence_path")
+        query_output_cleaned = False
+        if self.job.cleanup_query_outputs:
+            aggregated_confidence_path = None
+            self._cleanup_query_output_dir(prepared_job.output_dir)
+            query_output_cleaned = True
 
         return ScreeningResultRow(
             mutation_id=prepared_job.mutation_id,
@@ -411,19 +446,57 @@ class SubprocessOpenFoldBackend:
             gpu_inference_seconds=gpu_seconds,
             total_seconds=prepared_job.cpu_prep_seconds + gpu_seconds,
             output_dir=str(prepared_job.output_dir),
-            aggregated_confidence_path=best.get("aggregated_confidence_path"),
+            aggregated_confidence_path=aggregated_confidence_path,
             mutation_spec=(
                 asdict(prepared_job.mutation_spec)
                 if prepared_job.mutation_spec is not None
                 else None
             ),
             derived_interface_metrics=best.get("derived_interface_metrics", {}),
+            query_output_cleaned=query_output_cleaned,
         )
 
 
 class MutationScreeningRunner:
     def __init__(self, backend: PredictBackend | None = None):
         self.backend = backend
+
+    @staticmethod
+    def _configure_logging(job: ScreeningJob) -> None:
+        logger = logging.getLogger()
+        logger.setLevel(logging.INFO)
+        formatter = logging.Formatter("%(asctime)s %(levelname)s %(message)s")
+
+        if not any(
+            isinstance(handler, logging.StreamHandler)
+            and not isinstance(handler, logging.FileHandler)
+            for handler in logger.handlers
+        ):
+            stream_handler = logging.StreamHandler(sys.stdout)
+            stream_handler.setFormatter(formatter)
+            logger.addHandler(stream_handler)
+
+        if job.log_file is not None:
+            resolved_log = job.log_file.resolve()
+            resolved_log.parent.mkdir(parents=True, exist_ok=True)
+            if not any(
+                isinstance(handler, logging.FileHandler)
+                and Path(handler.baseFilename) == resolved_log
+                for handler in logger.handlers
+            ):
+                file_handler = logging.FileHandler(resolved_log, encoding="utf-8")
+                file_handler.setFormatter(formatter)
+                logger.addHandler(file_handler)
+
+    @staticmethod
+    def _check_free_disk_or_raise(target_dir: Path, min_free_disk_gb: float) -> None:
+        usage = shutil.disk_usage(target_dir.resolve())
+        free_gb = usage.free / (1024**3)
+        if free_gb < min_free_disk_gb:
+            raise RuntimeError(
+                f"Low disk space for {target_dir}: {free_gb:.2f} GB free,"
+                f" below required reserve of {min_free_disk_gb:.2f} GB"
+            )
 
     @staticmethod
     def _clone_query(query: Query) -> Query:
@@ -541,6 +614,14 @@ class MutationScreeningRunner:
     def run(self, job: ScreeningJob) -> list[ScreeningResultRow]:
         job.output_dir.mkdir(parents=True, exist_ok=True)
         job.cache_dir.mkdir(parents=True, exist_ok=True)
+        self._configure_logging(job)
+        logger.info("Starting screening job in %s", job.output_dir)
+        logger.info(
+            "Disk reserve guard: %.2f GB, cleanup_query_outputs=%s",
+            job.min_free_disk_gb,
+            job.cleanup_query_outputs,
+        )
+        self._check_free_disk_or_raise(job.output_dir, job.min_free_disk_gb)
 
         sequence_cache = SequenceArtifactCache(job.cache_dir / "sequence")
         result_cache = QueryResultCache(job.cache_dir / "results")
@@ -577,16 +658,32 @@ class MutationScreeningRunner:
             if item is None:
                 break
             if isinstance(item, ScreeningResultRow):
+                logger.info(
+                    "Using cached result for %s (query_result_cache_hit=%s)",
+                    item.query_id,
+                    item.query_result_cache_hit,
+                )
                 rows.append(item)
                 continue
 
+            self._check_free_disk_or_raise(job.output_dir, job.min_free_disk_gb)
             row = backend.run(item)
             result_cache.store(row)
+            self._check_free_disk_or_raise(job.output_dir, job.min_free_disk_gb)
+            logger.info(
+                "Finished %s in %.2fs (cache_hit=%s, sequence_cache_hits=%s, cleaned=%s)",
+                row.query_id,
+                row.total_seconds,
+                row.cache_hit,
+                row.sequence_cache_hits,
+                row.query_output_cleaned,
+            )
             rows.append(row)
 
         producer_thread.join()
         self._write_results(job.output_dir, rows)
         self._write_manifest(job, rows)
+        logger.info("Screening job completed with %s rows", len(rows))
         return rows
 
     def _write_results(self, output_dir: Path, rows: list[ScreeningResultRow]) -> None:

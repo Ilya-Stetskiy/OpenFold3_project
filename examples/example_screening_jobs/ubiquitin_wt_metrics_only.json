@@ -26,5 +26,8 @@
   "num_model_seeds": 1,
   "runner_yaml": "./examples/example_runner_yamls/low_mem.yml",
   "use_msa_server": false,
-  "use_templates": false
+  "use_templates": false,
+  "min_free_disk_gb": 1.0,
+  "cleanup_query_outputs": true,
+  "log_file": "./runtime_smoke/ubiquitin_wt/screening/night_run.log"
 }
