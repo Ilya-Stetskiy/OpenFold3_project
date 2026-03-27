@@ -88,3 +88,33 @@ Current scope:
 - real `OpenFold` inference is not executed by the test pack
 
 This means the tests validate almost all wrapper logic, but they do not confirm that your server's OpenFold runtime, weights, CUDA, MSA cache, and external binaries are fully working together.
+
+## Server Smoke Test
+
+For a real server-side runtime check, use the Linux smoke test:
+
+```bash
+bash ./run_server_smoke.sh
+```
+
+What it does:
+
+- runs real `run_openfold predict`
+- uses a tiny single-protein ubiquitin query from `server_smoke/query_ubiquitin.json`
+- disables templates
+- uses `num_diffusion_samples=1` and `num_model_seeds=1`
+- checks that at least one `*_confidences_aggregated.json` file and one model file are produced
+
+If `run_openfold` is not in `PATH`, set:
+
+```bash
+export OPENFOLD_RUNNER=/absolute/path/to/run_openfold
+```
+
+Optional custom output directory:
+
+```bash
+bash ./run_server_smoke.sh /tmp/openfold_smoke_output
+```
+
+This smoke test is intentionally separate from the normal unit/integration test pack. It validates the actual OpenFold runtime on the server.

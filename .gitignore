@@ -7,3 +7,4 @@
 *.pyo
 *.coverage
 coverage.xml
+server_smoke/_runtime_output/
