@@ -235,28 +235,53 @@ class SequenceArtifactCache:
             return False
 
         hit = False
-        if not chain.main_msa_file_paths and entry.get("main_msa_file_paths"):
-            chain.main_msa_file_paths = [Path(p) for p in entry["main_msa_file_paths"]]
+
+        entry_main = entry.get("main_msa_file_paths")
+        if entry_main and (
+            not chain.main_msa_file_paths
+            or [str(p) for p in chain.main_msa_file_paths] == entry_main
+        ):
             hit = True
-        if not chain.paired_msa_file_paths and entry.get("paired_msa_file_paths"):
+        if not chain.main_msa_file_paths and entry_main:
+            chain.main_msa_file_paths = [Path(p) for p in entry["main_msa_file_paths"]]
+
+        entry_paired = entry.get("paired_msa_file_paths")
+        if entry_paired and (
+            not chain.paired_msa_file_paths
+            or [str(p) for p in chain.paired_msa_file_paths] == entry_paired
+        ):
+            hit = True
+        if not chain.paired_msa_file_paths and entry_paired:
             chain.paired_msa_file_paths = [
                 Path(p) for p in entry["paired_msa_file_paths"]
             ]
-            hit = True
+
+        entry_template_alignment = entry.get("template_alignment_file_path")
         if (
-            chain.template_alignment_file_path is None
-            and entry.get("template_alignment_file_path") is not None
+            entry_template_alignment is not None
+            and (
+                chain.template_alignment_file_path is None
+                or str(chain.template_alignment_file_path)
+                == entry_template_alignment
+            )
         ):
+            hit = True
+        if chain.template_alignment_file_path is None and entry_template_alignment is not None:
             chain.template_alignment_file_path = Path(
                 entry["template_alignment_file_path"]
             )
-            hit = True
+
+        entry_template_ids = entry.get("template_entry_chain_ids")
         if (
-            not chain.template_entry_chain_ids
-            and entry.get("template_entry_chain_ids") is not None
+            entry_template_ids is not None
+            and (
+                not chain.template_entry_chain_ids
+                or list(chain.template_entry_chain_ids) == entry_template_ids
+            )
         ):
-            chain.template_entry_chain_ids = list(entry["template_entry_chain_ids"])
             hit = True
+        if not chain.template_entry_chain_ids and entry_template_ids is not None:
+            chain.template_entry_chain_ids = list(entry["template_entry_chain_ids"])
         return hit
 
 
