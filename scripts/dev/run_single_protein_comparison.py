@@ -21,6 +21,7 @@ import argparse
 import json
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -34,9 +35,11 @@ def dump_json(path: Path, data: dict[str, Any]) -> None:
     path.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
 
-def run_cmd(cmd: list[str], cwd: Path) -> None:
+def run_cmd(cmd: list[str], cwd: Path) -> float:
     print(f"[run] {' '.join(cmd)}")
+    start = time.perf_counter()
     subprocess.run(cmd, cwd=cwd, check=True)
+    return time.perf_counter() - start
 
 
 def find_first_aggregated_confidence_json(output_dir: Path) -> Path:
@@ -192,8 +195,8 @@ def main() -> None:
         str(screening_job_path),
     ]
 
-    run_cmd(baseline_cmd, cwd=repo_root)
-    run_cmd(screening_cmd, cwd=repo_root)
+    baseline_elapsed_seconds = run_cmd(baseline_cmd, cwd=repo_root)
+    screening_elapsed_seconds = run_cmd(screening_cmd, cwd=repo_root)
 
     baseline_agg_path = find_first_aggregated_confidence_json(baseline_dir)
     baseline_metrics = load_json(baseline_agg_path)
@@ -213,6 +216,21 @@ def main() -> None:
         screening=screening_best,
         tolerance=args.tolerance,
     )
+    timing = {
+        "baseline_elapsed_seconds": baseline_elapsed_seconds,
+        "screening_elapsed_seconds": screening_elapsed_seconds,
+        "delta_seconds": screening_elapsed_seconds - baseline_elapsed_seconds,
+        "speedup_ratio": (
+            baseline_elapsed_seconds / screening_elapsed_seconds
+            if screening_elapsed_seconds > 0
+            else None
+        ),
+        "screening_internal_total_seconds": screening_best.get("total_seconds"),
+        "screening_internal_cpu_prep_seconds": screening_best.get("cpu_prep_seconds"),
+        "screening_internal_gpu_inference_seconds": screening_best.get(
+            "gpu_inference_seconds"
+        ),
+    }
     summary = {
         "query_id": query_id,
         "baseline_aggregated_confidence_path": str(baseline_agg_path),
@@ -220,10 +238,12 @@ def main() -> None:
         "baseline_metrics": baseline_metrics,
         "screening_best_row": screening_best,
         "comparison": comparison,
+        "timing": timing,
     }
     dump_json(output_root / "comparison_summary.json", summary)
 
     print(json.dumps(summary["comparison"], indent=2))
+    print(json.dumps(summary["timing"], indent=2))
     if not comparison["within_tolerance"]:
         raise SystemExit(1)
 
