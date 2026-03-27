@@ -31,9 +31,9 @@ class TestPredictionWriter:
         ids=lambda x: x,
     )
     def test_written_coordinates(self, tmp_path, structure_format):
-        atom1 = structure.Atom([1, 2, 3], chain_id="A")
-        atom2 = structure.Atom([2, 3, 4], chain_id="A")
-        atom3 = structure.Atom([3, 4, 5], chain_id="B")
+        atom1 = structure.Atom([1, 2, 3], chain_id="A", element="C")
+        atom2 = structure.Atom([2, 3, 4], chain_id="A", element="N")
+        atom3 = structure.Atom([3, 4, 5], chain_id="B", element="O")
 
         atom_array = structure.array([atom1, atom2, atom3])
         atom_array.entity_id = np.array(["A", "A", "B"])
