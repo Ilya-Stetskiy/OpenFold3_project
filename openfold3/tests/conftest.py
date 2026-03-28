@@ -3,9 +3,6 @@ import numpy as np
 import pytest
 from biotite.structure import AtomArray
 
-from openfold3.core.data.primitives.structure.component import BiotiteCCDWrapper
-from openfold3.setup_openfold import setup_biotite_ccd
-
 
 @pytest.fixture
 def dummy_atom_array():
@@ -69,10 +66,14 @@ def ensure_biotite_ccd(request):
     """Download CCD file before any tests run (once per test session)."""
     if request.config.getoption("--skip-ccd-update"):
         return
+    from openfold3.setup_openfold import setup_biotite_ccd
+
     setup_biotite_ccd(ccd_path=biotite.setup_ccd.OUTPUT_CCD, force_download=False)
 
 
 @pytest.fixture(scope="session")
 def biotite_ccd_wrapper():
     """Cache CCD wrapper fixture for tests that need it."""
+    from openfold3.core.data.primitives.structure.component import BiotiteCCDWrapper
+
     return BiotiteCCDWrapper()

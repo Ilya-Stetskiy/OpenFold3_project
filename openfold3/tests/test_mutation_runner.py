@@ -23,6 +23,7 @@ from openfold3.mutation_runner import (
     ScreeningJob,
     ScreeningResultRow,
     SequenceArtifactCache,
+    SubprocessOpenFoldBackend,
     apply_point_mutation,
     sequence_hash,
 )
@@ -254,6 +255,45 @@ def test_query_result_cache_round_trips_row(tmp_path):
     assert loaded is not None
     assert loaded.query_id == row.query_id
     assert loaded.total_seconds == row.total_seconds
+
+
+def test_parse_best_summary_row_keeps_zero_metrics(tmp_path):
+    summary_path = tmp_path / "summary.jsonl"
+    summary_path.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "query_id": "demo",
+                        "sample_ranking_score": 0.0,
+                        "iptm": 0.0,
+                        "ptm": 0.0,
+                        "avg_plddt": 0.0,
+                        "gpde": 0.0,
+                    }
+                ),
+                json.dumps(
+                    {
+                        "query_id": "demo",
+                        "sample_ranking_score": -1.0,
+                        "iptm": -1.0,
+                        "ptm": -1.0,
+                        "avg_plddt": -1.0,
+                        "gpde": 5.0,
+                    }
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    best = SubprocessOpenFoldBackend.__new__(SubprocessOpenFoldBackend)._parse_best_summary_row(
+        summary_path, "demo"
+    )
+
+    assert best["sample_ranking_score"] == 0.0
+    assert best["gpde"] == 0.0
 
 
 def test_mutation_screening_runner_raises_for_unknown_mutation_chain(tmp_path):
