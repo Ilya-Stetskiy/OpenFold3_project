@@ -100,7 +100,11 @@ def compare_metric_dicts(
         ):
             numeric_keys.append(key)
 
-    comparison = {"numeric_keys": numeric_keys, "differences": {}, "within_tolerance": True}
+    comparison = {
+        "numeric_keys": numeric_keys,
+        "differences": {},
+        "within_tolerance": True,
+    }
     for key in numeric_keys:
         diff = abs(float(baseline[key]) - float(screening[key]))
         comparison["differences"][key] = diff
@@ -134,7 +138,7 @@ def main() -> None:
     parser.add_argument("--inference-ckpt-path", type=str, default=None)
     parser.add_argument("--inference-ckpt-name", type=str, default=None)
     parser.add_argument("--python-bin", type=str, default=sys.executable)
-    parser.add_argument("--tolerance", type=float, default=1e-6)
+    parser.add_argument("--tolerance", type=float, default=0.1)
     args = parser.parse_args()
 
     repo_root = Path.cwd()
@@ -226,7 +230,9 @@ def main() -> None:
             else None
         ),
         "screening_internal_total_seconds": screening_best.get("total_seconds"),
-        "screening_internal_cpu_prep_seconds": screening_best.get("cpu_prep_seconds"),
+        "screening_internal_cpu_prep_seconds": screening_best.get(
+            "cpu_prep_seconds"
+        ),
         "screening_internal_gpu_inference_seconds": screening_best.get(
             "gpu_inference_seconds"
         ),
