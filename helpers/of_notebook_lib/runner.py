@@ -4,6 +4,7 @@ import json
 import os
 import shutil
 import subprocess
+import tempfile
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -39,6 +40,22 @@ def _slug_timestamp(name: str) -> str:
     return f"{safe}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
 
+def _is_safe_temp_target(path: Path) -> bool:
+    try:
+        resolved = path.resolve(strict=False)
+    except OSError:
+        return False
+
+    temp_roots = {Path(tempfile.gettempdir()).resolve(strict=False)}
+    for candidate in (Path("/tmp"), Path("/var/tmp")):
+        try:
+            temp_roots.add(candidate.resolve(strict=False))
+        except OSError:
+            continue
+
+    return any(resolved == root or resolved.is_relative_to(root) for root in temp_roots)
+
+
 def ensure_msa_cache_link(runtime: RuntimeConfig) -> None:
     target = runtime.fixed_msa_tmp_dir
     source = runtime.msa_cache_dir
@@ -48,6 +65,11 @@ def ensure_msa_cache_link(runtime: RuntimeConfig) -> None:
         if target.is_symlink() and Path(os.readlink(target)) == source:
             return
         if target.is_dir() and not target.is_symlink():
+            if not _is_safe_temp_target(target):
+                raise RuntimeError(
+                    f"Refusing to replace non-temporary directory at {target}. "
+                    "Set OPENFOLD_FIXED_MSA_TMP_DIR to a disposable temp path."
+                )
             shutil.rmtree(target)
         else:
             target.unlink()
@@ -135,6 +157,8 @@ def run_prediction(
         return_code = run_cmd(cmd, env=env, log_path=log_path)
         if monitor is not None:
             monitor.record_stage("openfold_finished", f"return_code={return_code}")
+        if return_code != 0:
+            raise subprocess.CalledProcessError(return_code, cmd)
 
         samples = collect_samples(output_dir)
         if monitor is not None:

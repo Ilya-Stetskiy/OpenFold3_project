@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 
 import pandas as pd
@@ -68,6 +69,25 @@ def test_ensure_msa_cache_link_replaces_directory(tmp_path: Path) -> None:
     ensure_msa_cache_link(runtime)
 
     assert target.is_symlink()
+
+
+def test_ensure_msa_cache_link_rejects_non_temp_directory(
+    monkeypatch, tmp_path: Path
+) -> None:
+    source = tmp_path / "msa_cache"
+    source.mkdir()
+    target = tmp_path / "persistent" / "msa_link"
+    target.mkdir(parents=True)
+
+    runtime = RuntimeConfig(msa_cache_dir=source, fixed_msa_tmp_dir=target)
+    monkeypatch.setattr("of_notebook_lib.runner._is_safe_temp_target", lambda path: False)
+
+    try:
+        ensure_msa_cache_link(runtime)
+    except RuntimeError as exc:
+        assert "Refusing to replace non-temporary directory" in str(exc)
+    else:
+        raise AssertionError("Expected RuntimeError for non-temporary directory replacement")
 
 
 def test_run_cmd_writes_log(monkeypatch, tmp_path: Path) -> None:
@@ -203,3 +223,30 @@ def test_run_prediction_full_mocked_flow(monkeypatch, tmp_path: Path) -> None:
         "samples_collected",
         "summary_written",
     ]
+
+
+def test_run_prediction_raises_for_nonzero_return_code(monkeypatch, tmp_path: Path) -> None:
+    runtime = RuntimeConfig(
+        results_dir=tmp_path / "results",
+        openfold_prefix=tmp_path / "prefix",
+        msa_cache_dir=tmp_path / "msa_cache",
+        fixed_msa_tmp_dir=Path("/tmp/of_msa_link_failure_case"),
+        triton_cache_dir=tmp_path / "triton",
+    )
+    runtime.msa_cache_dir.mkdir(parents=True)
+    payload = {"queries": {"demo_case": {"chains": [{"molecule_type": "protein", "chain_ids": ["A"], "sequence": "AAAA"}]}}}
+
+    monkeypatch.setattr("of_notebook_lib.runner.ensure_msa_cache_link", lambda runtime_arg: None)
+
+    def fake_run_cmd(cmd, env, log_path):
+        log_path.write_text("failure\n", encoding="utf-8")
+        return 3
+
+    monkeypatch.setattr("of_notebook_lib.runner.run_cmd", fake_run_cmd)
+
+    try:
+        run_prediction(runtime=runtime, payload=payload, experiment_name="failing case")
+    except subprocess.CalledProcessError as exc:
+        assert exc.returncode == 3
+    else:
+        raise AssertionError("Expected CalledProcessError for nonzero run_openfold return code")
