@@ -45,7 +45,9 @@ def dump_json(path: Path, data: dict[str, Any]) -> None:
     path.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
 
-def load_mutations_from_csv(path: Path) -> list[MutationSpec]:
+def load_mutations_from_csv(
+    path: Path, max_mutations: int | None = None
+) -> list[MutationSpec]:
     mutations: list[MutationSpec] = []
     with path.open("r", encoding="utf-8", newline="") as fp:
         reader = csv.DictReader(fp)
@@ -66,6 +68,8 @@ def load_mutations_from_csv(path: Path) -> list[MutationSpec]:
                     to_residue=row["to_residue"].strip(),
                 )
             )
+            if max_mutations is not None and len(mutations) >= max_mutations:
+                break
     return mutations
 
 
@@ -74,7 +78,9 @@ def build_screening_job(args) -> ScreeningJob:
     queries = query_data["queries"]
     query_id = args.query_id or next(iter(queries))
     base_query = Query.model_validate(queries[query_id])
-    mutations = load_mutations_from_csv(args.mutations_csv)
+    mutations = load_mutations_from_csv(
+        args.mutations_csv, max_mutations=args.max_mutations
+    )
 
     output_root = args.output_root.resolve()
     log_file = output_root / "logs" / "overnight_screening.log"
@@ -153,6 +159,7 @@ def build_screening_job(args) -> ScreeningJob:
             "base_query_json": str(args.base_query_json.resolve()),
             "mutations_csv": str(args.mutations_csv.resolve()),
             "mutation_count": len(mutations),
+            "max_mutations": args.max_mutations,
             "output_root": str(output_root),
             "log_file": str(log_file),
             "query_prefix": job.query_prefix,
@@ -175,7 +182,10 @@ def main() -> None:
     parser.add_argument("--query-prefix", type=str, default=None)
     parser.add_argument("--num-diffusion-samples", type=int, default=1)
     parser.add_argument("--num-model-seeds", type=int, default=1)
-    parser.add_argument("--num-cpu-workers", type=int, default=(__import__("os").cpu_count() or 1))
+    parser.add_argument("--max-mutations", type=int, default=None)
+    parser.add_argument(
+        "--num-cpu-workers", type=int, default=(__import__("os").cpu_count() or 1)
+    )
     parser.add_argument("--max-inflight-queries", type=int, default=2)
     parser.add_argument("--min-free-disk-gb", type=float, default=1.0)
     parser.add_argument("--inference-ckpt-path", type=Path, default=None)

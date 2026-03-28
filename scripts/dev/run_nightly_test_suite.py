@@ -116,8 +116,9 @@ def parse_args() -> argparse.Namespace:
         help="Runner YAML used for both stages.",
     )
     parser.add_argument("--python-bin", type=str, default=sys.executable)
-    parser.add_argument("--num-diffusion-samples", type=int, default=1)
+    parser.add_argument("--num-diffusion-samples", type=int, default=4)
     parser.add_argument("--num-model-seeds", type=int, default=1)
+    parser.add_argument("--max-mutations", type=int, default=30)
     parser.add_argument("--comparison-tolerance", type=float, default=0.1)
     parser.add_argument("--num-cpu-workers", type=int, default=(__import__("os").cpu_count() or 1))
     parser.add_argument("--max-inflight-queries", type=int, default=2)
@@ -209,6 +210,8 @@ def main() -> None:
             str(args.num_diffusion_samples),
             "--num-model-seeds",
             str(args.num_model_seeds),
+            "--max-mutations",
+            str(args.max_mutations),
             "--num-cpu-workers",
             str(args.num_cpu_workers),
             "--max-inflight-queries",
