@@ -1,4 +1,4 @@
-"""
+﻿"""
 Convenience script for sanity-checking release dates of PDB entries and templates in
 training or validation dataset caches.
 """
@@ -11,6 +11,13 @@ from datetime import date
 from pathlib import Path
 
 from tqdm import tqdm
+
+if __package__ in (None, ""):
+    _path = __import__("pathlib").Path(__file__).resolve()
+    for _candidate in (_path.parent, *_path.parents):
+        if (_candidate / "openfold3").exists() or (_candidate / "scripts").exists():
+            __import__("sys").path.insert(0, str(_candidate))
+            break
 
 from openfold3.core.data.io.dataset_cache import read_datacache
 
@@ -26,7 +33,7 @@ def main():
     parser.add_argument(
         "release_cache",
         type=Path,
-        help="JSON file mapping PDB ID → ISO date or null",
+        help="JSON file mapping PDB ID в†’ ISO date or null",
     )
     parser.add_argument(
         "dataset_cache",
@@ -59,7 +66,7 @@ def main():
     )
     args = parser.parse_args()
 
-    # ——— configure logging ———
+    # вЂ”вЂ”вЂ” configure logging вЂ”вЂ”вЂ”
     logger = logging.getLogger()
     logger.setLevel(logging.INFO)
     fmt = logging.Formatter("%(asctime)s %(levelname)s: %(message)s")
@@ -73,12 +80,12 @@ def main():
         fh.setFormatter(fmt)
         logger.addHandler(fh)
 
-    logger.info("Loading release date cache…")
+    logger.info("Loading release date cacheвЂ¦")
     raw = json.loads(args.release_cache.read_text())
     release_dates = {pid: iso_to_date(d) for pid, d in raw.items()}
     raw_keys = set(raw.keys())
 
-    logger.info(f"Reading dataset cache {args.dataset_cache}…")
+    logger.info(f"Reading dataset cache {args.dataset_cache}вЂ¦")
     dc = read_datacache(args.dataset_cache)
     struct = dc.structure_data
     entry_ids = set(struct.keys())
@@ -97,7 +104,7 @@ def main():
 
     results: dict = {"dataset_cache_path": str(args.dataset_cache)}
 
-    # Only check entries if the user passed at least one entry‐date flag
+    # Only check entries if the user passed at least one entryвЂђdate flag
     if args.min_entry_date or args.max_entry_date:
         entries_too_old = []
         entries_too_new = []
@@ -149,7 +156,7 @@ def main():
             f"{sorted(missing_ids)}"
         )
 
-    # ——— all-clear only if no date-filter violations at all ———
+    # вЂ”вЂ”вЂ” all-clear only if no date-filter violations at all вЂ”вЂ”вЂ”
     if set(results.keys()) == {"dataset_cache_path"}:
         logger.info("All checks passed: no entries or templates outside date bounds.")
 
@@ -159,3 +166,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

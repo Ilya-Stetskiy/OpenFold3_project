@@ -1,9 +1,16 @@
-import logging
+﻿import logging
 from datetime import datetime
 from pathlib import Path
 from typing import Literal
 
 import click
+
+if __package__ in (None, ""):
+    _path = __import__("pathlib").Path(__file__).resolve()
+    for _candidate in (_path.parent, *_path.parents):
+        if (_candidate / "openfold3").exists() or (_candidate / "scripts").exists():
+            __import__("sys").path.insert(0, str(_candidate))
+            break
 
 from openfold3.core.data.pipelines.preprocessing.caches.pdb_weighted import (
     create_pdb_training_dataset_cache_of3,
@@ -68,7 +75,7 @@ from openfold3.core.data.pipelines.preprocessing.caches.pdb_weighted import (
     type=float,
     default=None,
     help=(
-        "Maximum resolution for structures in the dataset in Å. If not provided, no "
+        "Maximum resolution for structures in the dataset in Г…. If not provided, no "
         "filtering by resolution is performed."
     ),
 )
@@ -202,3 +209,4 @@ def main(
 
 if __name__ == "__main__":
     main()
+

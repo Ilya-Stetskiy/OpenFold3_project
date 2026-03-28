@@ -1,8 +1,15 @@
-import logging
+﻿import logging
 from pathlib import Path
 
 import click
 from tqdm import tqdm
+
+if __package__ in (None, ""):
+    _path = __import__("pathlib").Path(__file__).resolve()
+    for _candidate in (_path.parent, *_path.parents):
+        if (_candidate / "openfold3").exists() or (_candidate / "scripts").exists():
+            __import__("sys").path.insert(0, str(_candidate))
+            break
 
 from openfold3.core.data.io.sequence.fasta import (
     consolidate_preprocessed_fastas,
@@ -105,3 +112,4 @@ def main(
 
 if __name__ == "__main__":
     main()
+

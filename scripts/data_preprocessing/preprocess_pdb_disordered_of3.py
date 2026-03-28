@@ -1,10 +1,17 @@
-"""Script for creating a metadata cache for the disordered distillation set."""
+﻿"""Script for creating a metadata cache for the disordered distillation set."""
 
 import json
 from pathlib import Path
 from typing import Any
 
 import click
+
+if __package__ in (None, ""):
+    _path = __import__("pathlib").Path(__file__).resolve()
+    for _candidate in (_path.parent, *_path.parents):
+        if (_candidate / "openfold3").exists() or (_candidate / "scripts").exists():
+            __import__("sys").path.insert(0, str(_candidate))
+            break
 
 from openfold3.core.data.pipelines.preprocessing.structure import (
     preprocess_pdb_disordered_of3,
@@ -314,3 +321,4 @@ def parse_input_args(
 
 if __name__ == "__main__":
     main()
+

@@ -1,4 +1,4 @@
-"""
+﻿"""
 Script to iterate over datapoints with the data pipeline.
 
 The treadmill requires at least one worker to run.
@@ -57,6 +57,13 @@ import torch
 from lightning_fabric.utilities.seed import pl_worker_init_function
 from torch.utils.data import DataLoader, get_worker_info
 from tqdm import tqdm
+
+if __package__ in (None, ""):
+    _path = __import__("pathlib").Path(__file__).resolve()
+    for _candidate in (_path.parent, *_path.parents):
+        if (_candidate / "openfold3").exists() or (_candidate / "scripts").exists():
+            __import__("sys").path.insert(0, str(_candidate))
+            break
 
 from openfold3.core.config import config_utils
 from openfold3.core.data.framework.data_module import (
@@ -635,3 +642,4 @@ def run_arg_checks(
 
 if __name__ == "__main__":
     main()
+

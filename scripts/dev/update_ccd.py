@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 # Copyright 2025 AlQuraishi Laboratory
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -26,6 +26,13 @@ from pathlib import Path
 
 import biotite.setup_ccd
 import boto3
+
+if __package__ in (None, ""):
+    _path = __import__("pathlib").Path(__file__).resolve()
+    for _candidate in (_path.parent, *_path.parents):
+        if (_candidate / "openfold3").exists() or (_candidate / "scripts").exists():
+            __import__("sys").path.insert(0, str(_candidate))
+            break
 
 from openfold3.core.utils.s3 import compute_local_crc64nvme_base64
 from openfold3.setup_openfold import S3_BUCKET, S3_KEY
@@ -91,3 +98,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+

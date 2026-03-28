@@ -1,4 +1,4 @@
-"""Script that gets the release dates for all PDB IDs in an mmCIF directory."""
+﻿"""Script that gets the release dates for all PDB IDs in an mmCIF directory."""
 
 import argparse
 import json
@@ -7,6 +7,13 @@ from pathlib import Path
 
 from biotite.structure.io.pdbx import CIFFile
 from tqdm import tqdm
+
+if __package__ in (None, ""):
+    _path = __import__("pathlib").Path(__file__).resolve()
+    for _candidate in (_path.parent, *_path.parents):
+        if (_candidate / "openfold3").exists() or (_candidate / "scripts").exists():
+            __import__("sys").path.insert(0, str(_candidate))
+            break
 
 from openfold3.core.data.primitives.structure.metadata import (
     get_cif_block,
@@ -40,7 +47,7 @@ def _worker(args):
 def main():
     parser = argparse.ArgumentParser(
         description=(
-            "Build a JSON cache mapping PDB ID → release date from a raw PDB directory."
+            "Build a JSON cache mapping PDB ID в†’ release date from a raw PDB directory."
         )
     )
     parser.add_argument(
@@ -92,3 +99,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

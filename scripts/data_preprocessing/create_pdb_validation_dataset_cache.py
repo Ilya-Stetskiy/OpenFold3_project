@@ -1,9 +1,16 @@
-import logging
+﻿import logging
 from datetime import datetime
 from pathlib import Path
 from typing import Literal
 
 import click
+
+if __package__ in (None, ""):
+    _path = __import__("pathlib").Path(__file__).resolve()
+    for _candidate in (_path.parent, *_path.parents):
+        if (_candidate / "openfold3").exists() or (_candidate / "scripts").exists():
+            __import__("sys").path.insert(0, str(_candidate))
+            break
 
 from openfold3.core.data.pipelines.preprocessing.caches.pdb_val import (
     create_pdb_val_dataset_cache_of3,
@@ -69,7 +76,7 @@ from openfold3.core.data.pipelines.preprocessing.caches.pdb_val import (
     "--max-resolution",
     type=float,
     default=4.5,
-    help="Maximum resolution for structures in the dataset in Å.",
+    help="Maximum resolution for structures in the dataset in Г….",
 )
 @click.option(
     "--max-polymer-chains",
@@ -197,7 +204,7 @@ def main(
         min_release_date (str):
             Minimum release date for included structures, formatted as 'YYYY-MM-DD'.
         max_resolution (float):
-            Maximum resolution for structures in the dataset in Å.
+            Maximum resolution for structures in the dataset in Г….
         max_polymer_chains (int):
             Maximum number of polymer chains a structure can have to be included as a
             target.
@@ -252,3 +259,4 @@ def main(
 
 if __name__ == "__main__":
     main()
+

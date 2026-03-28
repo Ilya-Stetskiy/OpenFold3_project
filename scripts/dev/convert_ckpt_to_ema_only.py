@@ -1,4 +1,4 @@
-"""
+﻿"""
 Converts a full checkpoint file to a checkpoint that only contains EMA weights
 for inference.
 
@@ -14,6 +14,13 @@ from pathlib import Path, PosixPath
 
 import ml_collections as mlc
 import torch
+
+if __package__ in (None, ""):
+    _path = __import__("pathlib").Path(__file__).resolve()
+    for _candidate in (_path.parent, *_path.parents):
+        if (_candidate / "openfold3").exists() or (_candidate / "scripts").exists():
+            __import__("sys").path.insert(0, str(_candidate))
+            break
 
 from openfold3.core.utils.checkpoint_loading_utils import load_checkpoint
 from openfold3.projects.of3_all_atom.model import MODEL_VERSION, OpenFold3
@@ -67,3 +74,4 @@ if __name__ == "__main__":
     else:
         convert_checkpoint_to_ema_only(args.input_ckpt_path, tmp_file)
         add_version_tensor_to_checkpoint(tmp_file, args.output_ckpt_path)
+

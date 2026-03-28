@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+﻿#!/usr/bin/env python
 # Copyright 2026 AlQuraishi Laboratory
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -119,7 +119,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--num-diffusion-samples", type=int, default=1)
     parser.add_argument("--num-model-seeds", type=int, default=1)
     parser.add_argument("--comparison-tolerance", type=float, default=0.1)
-    parser.add_argument("--num-cpu-workers", type=int, default=4)
+    parser.add_argument("--num-cpu-workers", type=int, default=(__import__("os").cpu_count() or 1))
     parser.add_argument("--max-inflight-queries", type=int, default=2)
     parser.add_argument("--min-free-disk-gb", type=float, default=2.0)
     parser.add_argument("--inference-ckpt-path", type=Path, default=None)
@@ -254,3 +254,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+

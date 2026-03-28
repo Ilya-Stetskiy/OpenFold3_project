@@ -1,4 +1,4 @@
-import inspect
+﻿import inspect
 import json
 import logging
 import multiprocessing as mp
@@ -13,6 +13,13 @@ from typing import Literal
 import click
 from pydantic import BaseModel
 from tqdm import tqdm
+
+if __package__ in (None, ""):
+    _path = __import__("pathlib").Path(__file__).resolve()
+    for _candidate in (_path.parent, *_path.parents):
+        if (_candidate / "openfold3").exists() or (_candidate / "scripts").exists():
+            __import__("sys").path.insert(0, str(_candidate))
+            break
 
 from openfold3.core.config.config_utils import load_yaml
 
@@ -355,3 +362,4 @@ def main(
 
 if __name__ == "__main__":
     main()
+

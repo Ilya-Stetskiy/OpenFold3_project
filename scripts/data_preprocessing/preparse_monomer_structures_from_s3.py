@@ -1,7 +1,14 @@
-import json
+﻿import json
 from pathlib import Path
 
 import click
+
+if __package__ in (None, ""):
+    _path = __import__("pathlib").Path(__file__).resolve()
+    for _candidate in (_path.parent, *_path.parents):
+        if (_candidate / "openfold3").exists() or (_candidate / "scripts").exists():
+            __import__("sys").path.insert(0, str(_candidate))
+            break
 
 from openfold3.core.data.pipelines.preprocessing.structure import (
     preprocess_pdb_monomer_distilation,
@@ -44,3 +51,4 @@ def main(dataset_cache: str, output_dir: str, s3_config: str, num_workers: int =
 
 if __name__ == "__main__":
     main()
+

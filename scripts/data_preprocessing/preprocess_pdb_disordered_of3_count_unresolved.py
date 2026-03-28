@@ -1,10 +1,17 @@
-import multiprocessing as mp
+﻿import multiprocessing as mp
 from pathlib import Path
 
 import click
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
+
+if __package__ in (None, ""):
+    _path = __import__("pathlib").Path(__file__).resolve()
+    for _candidate in (_path.parent, *_path.parents):
+        if (_candidate / "openfold3").exists() or (_candidate / "scripts").exists():
+            __import__("sys").path.insert(0, str(_candidate))
+            break
 
 from openfold3.core.data.io.structure.atom_array import read_atomarray_from_npz
 from openfold3.core.data.resources.residues import MoleculeType
@@ -233,3 +240,4 @@ class UnresolvedResidueCounter:
 
 if __name__ == "__main__":
     main()
+

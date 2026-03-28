@@ -1,4 +1,4 @@
-"""MSA pre-parsing script for AF3 dataset."""
+﻿"""MSA pre-parsing script for AF3 dataset."""
 
 import multiprocessing as mp
 import traceback
@@ -9,6 +9,13 @@ import click
 import numpy as np
 from pydantic import BaseModel, Field, ValidationError
 from tqdm import tqdm
+
+if __package__ in (None, ""):
+    _path = __import__("pathlib").Path(__file__).resolve()
+    for _candidate in (_path.parent, *_path.parents):
+        if (_candidate / "openfold3").exists() or (_candidate / "scripts").exists():
+            __import__("sys").path.insert(0, str(_candidate))
+            break
 
 from openfold3.core.data.io.sequence.msa import parse_msas_direct, standardize_filepaths
 
@@ -181,3 +188,4 @@ class _MsaPreparser:
 
 if __name__ == "__main__":
     main()
+

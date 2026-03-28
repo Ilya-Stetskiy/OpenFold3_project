@@ -1,4 +1,4 @@
-import json
+﻿import json
 import multiprocessing as mp
 import traceback
 import warnings
@@ -8,6 +8,13 @@ import click
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
+
+if __package__ in (None, ""):
+    _path = __import__("pathlib").Path(__file__).resolve()
+    for _candidate in (_path.parent, *_path.parents):
+        if (_candidate / "openfold3").exists() or (_candidate / "scripts").exists():
+            __import__("sys").path.insert(0, str(_candidate))
+            break
 
 from openfold3.core.data.io.sequence.fasta import get_chain_id_to_seq_from_fasta
 from openfold3.core.data.io.sequence.msa import parse_msas_preparsed
@@ -319,3 +326,4 @@ def main(
 
 if __name__ == "__main__":
     main()
+

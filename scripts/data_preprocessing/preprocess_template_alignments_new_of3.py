@@ -1,4 +1,4 @@
-"""
+﻿"""
 Script to preprocess template alignments separately from model training or inference.
 """
 
@@ -6,6 +6,13 @@ Script to preprocess template alignments separately from model training or infer
 from pathlib import Path
 
 import click
+
+if __package__ in (None, ""):
+    _path = __import__("pathlib").Path(__file__).resolve()
+    for _candidate in (_path.parent, *_path.parents):
+        if (_candidate / "openfold3").exists() or (_candidate / "scripts").exists():
+            __import__("sys").path.insert(0, str(_candidate))
+            break
 
 from openfold3.core.config import config_utils
 from openfold3.core.data.pipelines.preprocessing.template import (
@@ -118,3 +125,4 @@ def main(
 
 if __name__ == "__main__":
     main()
+
