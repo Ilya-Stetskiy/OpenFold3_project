@@ -510,9 +510,14 @@ class MutationScreeningRunner:
         return Query.model_validate(query.model_dump())
 
     def _register_base_chain_cache(
-        self, base_query: Query, sequence_cache: SequenceArtifactCache
+        self,
+        base_query: Query,
+        sequence_cache: SequenceArtifactCache,
+        mutable_chain_ids: set[str],
     ) -> None:
         for chain in base_query.chains:
+            if self._chain_overlaps_mutable_ids(chain, mutable_chain_ids):
+                continue
             sequence_cache.register_chain(chain)
 
     def _apply_mutation(self, query: Query, mutation: MutationSpec) -> None:
@@ -527,11 +532,31 @@ class MutationScreeningRunner:
                 return
         raise ValueError(f"Could not find mutable protein chain {mutation.chain_id}")
 
+    @staticmethod
+    def _chain_overlaps_mutable_ids(chain: Chain, mutable_chain_ids: set[str]) -> bool:
+        return any(chain_id in mutable_chain_ids for chain_id in chain.chain_ids)
+
+    @staticmethod
+    def _mutable_chain_ids_from_query(
+        query: Query, mutations: list[MutationSpec]
+    ) -> set[str]:
+        requested_chain_ids = {mutation.chain_id for mutation in mutations}
+        mutable_chain_ids: set[str] = set()
+        for chain in query.chains:
+            if any(chain_id in requested_chain_ids for chain_id in chain.chain_ids):
+                mutable_chain_ids.update(chain.chain_ids)
+        return mutable_chain_ids
+
     def _resolve_sequence_cache(
-        self, query: Query, sequence_cache: SequenceArtifactCache
+        self,
+        query: Query,
+        sequence_cache: SequenceArtifactCache,
+        mutable_chain_ids: set[str],
     ) -> int:
         hits = 0
         for chain in query.chains:
+            if self._chain_overlaps_mutable_ids(chain, mutable_chain_ids):
+                continue
             if sequence_cache.resolve_chain(chain):
                 hits += 1
             sequence_cache.register_chain(chain)
@@ -576,6 +601,7 @@ class MutationScreeningRunner:
         mutation_spec: MutationSpec | None,
         sequence_cache: SequenceArtifactCache,
         result_cache: QueryResultCache,
+        mutable_chain_ids: set[str],
     ) -> PreparedMutationJob | ScreeningResultRow:
         started = time.perf_counter()
         query = self._clone_query(job.base_query)
@@ -585,7 +611,9 @@ class MutationScreeningRunner:
         if mutation_spec is not None:
             self._apply_mutation(query, mutation_spec)
 
-        sequence_cache_hits = self._resolve_sequence_cache(query, sequence_cache)
+        sequence_cache_hits = self._resolve_sequence_cache(
+            query, sequence_cache, mutable_chain_ids
+        )
         query_hash = self._query_hash(query, job)
 
         if job.resume:
@@ -632,7 +660,10 @@ class MutationScreeningRunner:
 
         sequence_cache = SequenceArtifactCache(job.cache_dir / "sequence")
         result_cache = QueryResultCache(job.cache_dir / "results")
-        self._register_base_chain_cache(job.base_query, sequence_cache)
+        mutable_chain_ids = self._mutable_chain_ids_from_query(job.base_query, job.mutations)
+        self._register_base_chain_cache(
+            job.base_query, sequence_cache, mutable_chain_ids
+        )
 
         backend = self.backend or SubprocessOpenFoldBackend(job)
         prepared_queue: queue.Queue[PreparedMutationJob | ScreeningResultRow | None] = (
@@ -654,6 +685,7 @@ class MutationScreeningRunner:
                         mutation_spec,
                         sequence_cache,
                         result_cache,
+                        mutable_chain_ids,
                     )
                     for mutation_spec in entries
                 ]
