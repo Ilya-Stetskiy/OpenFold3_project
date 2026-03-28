@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 
 import pandas as pd
@@ -68,6 +69,23 @@ def test_ensure_msa_cache_link_replaces_directory(tmp_path: Path) -> None:
     ensure_msa_cache_link(runtime)
 
     assert target.is_symlink()
+
+
+def test_ensure_msa_cache_link_rejects_non_temp_directory(monkeypatch, tmp_path: Path) -> None:
+    source = tmp_path / "msa_cache"
+    source.mkdir()
+    target = tmp_path / "persistent" / "msa_link"
+    target.mkdir(parents=True)
+
+    runtime = RuntimeConfig(msa_cache_dir=source, fixed_msa_tmp_dir=target)
+    monkeypatch.setattr("of_notebook_lib.runner._is_safe_temp_target", lambda path: False)
+
+    try:
+        ensure_msa_cache_link(runtime)
+    except RuntimeError as exc:
+        assert "Refusing to replace non-temporary directory" in str(exc)
+    else:
+        raise AssertionError("Expected RuntimeError for unsafe MSA link replacement")
 
 
 def test_run_cmd_writes_log(monkeypatch, tmp_path: Path) -> None:
@@ -164,3 +182,30 @@ def test_run_prediction_full_mocked_flow(monkeypatch, tmp_path: Path) -> None:
     assert "--inference_ckpt_name=demo_ckpt" in captured["cmd"]
     assert captured["report_called"] is True
     assert captured["copy_called"] is True
+
+
+def test_run_prediction_raises_on_nonzero_return_code(monkeypatch, tmp_path: Path) -> None:
+    runtime = RuntimeConfig(
+        results_dir=tmp_path / "results",
+        openfold_prefix=tmp_path / "prefix",
+        msa_cache_dir=tmp_path / "msa_cache",
+        fixed_msa_tmp_dir=Path("/tmp/of3_colabfold_msas_test"),
+    )
+    runtime.msa_cache_dir.mkdir(parents=True)
+
+    monkeypatch.setattr("of_notebook_lib.runner.ensure_msa_cache_link", lambda runtime_arg: None)
+    monkeypatch.setattr(
+        "of_notebook_lib.runner.run_cmd",
+        lambda cmd, env, log_path: 17,
+    )
+
+    try:
+        run_prediction(
+            runtime=runtime,
+            payload={"queries": {}},
+            experiment_name="broken case",
+        )
+    except subprocess.CalledProcessError as exc:
+        assert exc.returncode == 17
+    else:
+        raise AssertionError("Expected CalledProcessError for failed run_openfold call")
