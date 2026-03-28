@@ -128,6 +128,32 @@ def test_run_prediction_full_mocked_flow(monkeypatch, tmp_path: Path) -> None:
 
     fake_sample_objects = ["sample-object"]
     fake_winners = {"sample_ranking_score": "winner"}
+    stage_calls: list[tuple[str, str]] = []
+
+    class FakeMonitor:
+        def __init__(self, summary_dir: Path, *, sample_interval_seconds: float = 1.0) -> None:
+            self.summary_dir = summary_dir
+            self.resource_csv_path = summary_dir / "resource_usage.csv"
+            self.stage_marks_path = summary_dir / "stage_marks.csv"
+            self.monitor_plot_path = summary_dir / "resource_usage.png"
+
+        def start(self) -> None:
+            self.summary_dir.mkdir(parents=True, exist_ok=True)
+
+        def record_stage(self, stage: str, details: str = "") -> None:
+            stage_calls.append((stage, details))
+
+        def stop(self):
+            self.resource_csv_path.write_text("timestamp_utc\n", encoding="utf-8")
+            self.stage_marks_path.write_text("timestamp_utc,elapsed_seconds,stage,details\n", encoding="utf-8")
+            self.monitor_plot_path.write_bytes(b"\x89PNG\r\n\x1a\n")
+
+            class _Artifacts:
+                resource_csv_path = self.resource_csv_path
+                stage_marks_path = self.stage_marks_path
+                monitor_plot_path = self.monitor_plot_path
+
+            return _Artifacts()
 
     monkeypatch.setattr("of_notebook_lib.runner.ensure_msa_cache_link", fake_ensure)
     monkeypatch.setattr("of_notebook_lib.runner.run_cmd", fake_run_cmd)
@@ -136,6 +162,7 @@ def test_run_prediction_full_mocked_flow(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr("of_notebook_lib.runner.write_best_samples_report", lambda *args: captured.setdefault("report_called", True))
     monkeypatch.setattr("of_notebook_lib.runner.copy_best_artifacts", lambda *args: captured.setdefault("copy_called", True))
     monkeypatch.setattr("of_notebook_lib.runner.samples_to_dataframe", lambda samples: fake_samples)
+    monkeypatch.setattr("of_notebook_lib.runner.RunMonitor", FakeMonitor)
 
     result = run_prediction(
         runtime=runtime,
@@ -148,6 +175,7 @@ def test_run_prediction_full_mocked_flow(monkeypatch, tmp_path: Path) -> None:
         runner_yaml=tmp_path / "runner.yml",
         inference_ckpt_path=tmp_path / "ckpt",
         inference_ckpt_name="demo_ckpt",
+        enable_monitoring=True,
     )
 
     assert isinstance(result, RunResult)
@@ -164,3 +192,14 @@ def test_run_prediction_full_mocked_flow(monkeypatch, tmp_path: Path) -> None:
     assert "--inference_ckpt_name=demo_ckpt" in captured["cmd"]
     assert captured["report_called"] is True
     assert captured["copy_called"] is True
+    assert result.resource_csv_path is not None and result.resource_csv_path.exists()
+    assert result.stage_marks_path is not None and result.stage_marks_path.exists()
+    assert result.monitor_plot_path is not None and result.monitor_plot_path.exists()
+    assert [name for name, _ in stage_calls] == [
+        "query_written",
+        "runtime_prepared",
+        "openfold_started",
+        "openfold_finished",
+        "samples_collected",
+        "summary_written",
+    ]

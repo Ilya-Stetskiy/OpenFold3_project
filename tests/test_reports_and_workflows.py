@@ -96,7 +96,10 @@ def test_run_mutation_scan_uses_mocked_prediction_result(
         ]
     )
 
+    captured: dict = {}
+
     def fake_run_prediction(runtime, payload, experiment_name, **kwargs):
+        captured["kwargs"] = kwargs
         return _FakeRunResult(experiment_name=experiment_name, samples_df=fake_samples)
 
     monkeypatch.setattr("of_notebook_lib.workflows.run_prediction", fake_run_prediction)
@@ -116,3 +119,4 @@ def test_run_mutation_scan_uses_mocked_prediction_result(
     assert len(mutation_summary) == 2
     assert not mutation_ranking.empty
     assert set(mutation_summary["mutation_label"]) == {"WT", "B_F4G"}
+    assert captured["kwargs"]["enable_monitoring"] is True

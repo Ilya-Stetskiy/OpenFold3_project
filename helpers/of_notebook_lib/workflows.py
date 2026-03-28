@@ -89,6 +89,7 @@ def run_mutation_scan(
         runner_yaml=runner_yaml,
         inference_ckpt_path=inference_ckpt_path,
         inference_ckpt_name=inference_ckpt_name,
+        enable_monitoring=True,
     )
 
     mutation_summary = summarize_mutation_batch(result.samples_df)

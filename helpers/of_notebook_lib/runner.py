@@ -16,6 +16,7 @@ from .analysis import (
     write_best_samples_report,
 )
 from .config import RuntimeConfig
+from .monitoring import RunMonitor
 
 
 @dataclass(slots=True)
@@ -28,6 +29,9 @@ class RunResult:
     log_path: Path
     samples_df: object
     return_code: int
+    resource_csv_path: Path | None = None
+    stage_marks_path: Path | None = None
+    monitor_plot_path: Path | None = None
 
 
 def _slug_timestamp(name: str) -> str:
@@ -81,6 +85,7 @@ def run_prediction(
     runner_yaml: str | Path | None = None,
     inference_ckpt_path: str | Path | None = None,
     inference_ckpt_name: str | None = None,
+    enable_monitoring: bool = False,
 ) -> RunResult:
     run_dir = runtime.results_dir / _slug_timestamp(experiment_name)
     output_dir = run_dir / "output"
@@ -93,56 +98,78 @@ def run_prediction(
     summary_dir.mkdir(parents=True, exist_ok=True)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    query_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    monitor = RunMonitor(summary_dir) if enable_monitoring else None
+    if monitor is not None:
+        monitor.start()
 
-    ensure_msa_cache_link(runtime)
-    env = runtime.build_env()
+    monitoring_artifacts = None
+    try:
+        query_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        if monitor is not None:
+            monitor.record_stage("query_written", f"queries={len(payload.get('queries', {}))}")
 
-    cmd = [
-        str(runtime.openfold_runner),
-        "predict",
-        f"--query_json={query_path}",
-        f"--output_dir={output_dir}",
-        f"--use_templates={str(use_templates).lower()}",
-        f"--use_msa_server={str(use_msa_server).lower()}",
-        f"--num_diffusion_samples={num_diffusion_samples}",
-        f"--num_model_seeds={num_model_seeds}",
-    ]
-    if runner_yaml:
-        cmd.append(f"--runner_yaml={Path(runner_yaml)}")
-    if inference_ckpt_path:
-        cmd.append(f"--inference_ckpt_path={Path(inference_ckpt_path)}")
-    if inference_ckpt_name:
-        cmd.append(f"--inference_ckpt_name={inference_ckpt_name}")
+        ensure_msa_cache_link(runtime)
+        env = runtime.build_env()
+        if monitor is not None:
+            monitor.record_stage("runtime_prepared")
 
-    return_code = run_cmd(cmd, env=env, log_path=log_path)
+        cmd = [
+            str(runtime.openfold_runner),
+            "predict",
+            f"--query_json={query_path}",
+            f"--output_dir={output_dir}",
+            f"--use_templates={str(use_templates).lower()}",
+            f"--use_msa_server={str(use_msa_server).lower()}",
+            f"--num_diffusion_samples={num_diffusion_samples}",
+            f"--num_model_seeds={num_model_seeds}",
+        ]
+        if runner_yaml:
+            cmd.append(f"--runner_yaml={Path(runner_yaml)}")
+        if inference_ckpt_path:
+            cmd.append(f"--inference_ckpt_path={Path(inference_ckpt_path)}")
+        if inference_ckpt_name:
+            cmd.append(f"--inference_ckpt_name={inference_ckpt_name}")
 
-    samples = collect_samples(output_dir)
-    winners = best_samples_by_metric(samples)
-    write_best_samples_report(report_path, samples, winners)
-    copy_best_artifacts(summary_dir, winners)
-    samples_df = samples_to_dataframe(samples)
+        if monitor is not None:
+            monitor.record_stage("openfold_started")
+        return_code = run_cmd(cmd, env=env, log_path=log_path)
+        if monitor is not None:
+            monitor.record_stage("openfold_finished", f"return_code={return_code}")
 
-    run_params = {
-        "experiment_name": experiment_name,
-        "run_dir": str(run_dir),
-        "query_path": str(query_path),
-        "output_dir": str(output_dir),
-        "summary_dir": str(summary_dir),
-        "log_path": str(log_path),
-        "return_code": return_code,
-        "use_templates": use_templates,
-        "use_msa_server": use_msa_server,
-        "num_diffusion_samples": num_diffusion_samples,
-        "num_model_seeds": num_model_seeds,
-        "runner_yaml": str(runner_yaml) if runner_yaml else None,
-        "inference_ckpt_path": str(inference_ckpt_path) if inference_ckpt_path else None,
-        "inference_ckpt_name": inference_ckpt_name,
-    }
-    run_params_path.write_text(
-        json.dumps(run_params, indent=2, ensure_ascii=False) + "\n",
-        encoding="utf-8",
-    )
+        samples = collect_samples(output_dir)
+        if monitor is not None:
+            monitor.record_stage("samples_collected", f"count={len(samples)}")
+        winners = best_samples_by_metric(samples)
+        write_best_samples_report(report_path, samples, winners)
+        copy_best_artifacts(summary_dir, winners)
+        samples_df = samples_to_dataframe(samples)
+        if monitor is not None:
+            monitor.record_stage("summary_written", f"rows={len(samples_df)}")
+
+        run_params = {
+            "experiment_name": experiment_name,
+            "run_dir": str(run_dir),
+            "query_path": str(query_path),
+            "output_dir": str(output_dir),
+            "summary_dir": str(summary_dir),
+            "log_path": str(log_path),
+            "return_code": return_code,
+            "use_templates": use_templates,
+            "use_msa_server": use_msa_server,
+            "num_diffusion_samples": num_diffusion_samples,
+            "num_model_seeds": num_model_seeds,
+            "runner_yaml": str(runner_yaml) if runner_yaml else None,
+            "inference_ckpt_path": str(inference_ckpt_path) if inference_ckpt_path else None,
+            "inference_ckpt_name": inference_ckpt_name,
+            "enable_monitoring": enable_monitoring,
+        }
+        run_params_path.write_text(
+            json.dumps(run_params, indent=2, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+    finally:
+        if monitor is not None:
+            monitoring_artifacts = monitor.stop()
 
     return RunResult(
         experiment_name=experiment_name,
@@ -153,4 +180,7 @@ def run_prediction(
         log_path=log_path,
         samples_df=samples_df,
         return_code=return_code,
+        resource_csv_path=monitoring_artifacts.resource_csv_path if monitoring_artifacts else None,
+        stage_marks_path=monitoring_artifacts.stage_marks_path if monitoring_artifacts else None,
+        monitor_plot_path=monitoring_artifacts.monitor_plot_path if monitoring_artifacts else None,
     )
