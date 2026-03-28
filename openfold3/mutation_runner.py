@@ -273,7 +273,10 @@ class SequenceArtifactCache:
             )
         ):
             hit = True
-        if chain.template_alignment_file_path is None and entry_template_alignment is not None:
+        if (
+            chain.template_alignment_file_path is None
+            and entry_template_alignment is not None
+        ):
             chain.template_alignment_file_path = Path(
                 entry["template_alignment_file_path"]
             )
@@ -325,7 +328,9 @@ class SubprocessOpenFoldBackend:
     def _runner_yaml_for_job(self, prepared_job: PreparedMutationJob) -> Path:
         config = {}
         if self.job.runner_yaml is not None:
-            config = yaml.safe_load(self.job.runner_yaml.read_text(encoding="utf-8")) or {}
+            config = (
+                yaml.safe_load(self.job.runner_yaml.read_text(encoding="utf-8")) or {}
+            )
 
         output_settings = config.setdefault("output_writer_settings", {})
         output_settings["metrics_only"] = self.job.output_policy == "metrics_only"
@@ -345,7 +350,9 @@ class SubprocessOpenFoldBackend:
         yaml_path.write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
         return yaml_path
 
-    def _parse_best_summary_row(self, summary_path: Path, query_id: str) -> dict[str, Any]:
+    def _parse_best_summary_row(
+        self, summary_path: Path, query_id: str
+    ) -> dict[str, Any]:
         rows = []
         for line in summary_path.read_text(encoding="utf-8").splitlines():
             if not line.strip():
@@ -635,7 +642,9 @@ class MutationScreeningRunner:
         rows: list[ScreeningResultRow] = []
 
         def producer() -> None:
-            with ThreadPoolExecutor(max_workers=max(1, job.num_cpu_workers)) as executor:
+            with ThreadPoolExecutor(
+                max_workers=max(1, job.num_cpu_workers)
+            ) as executor:
                 futures = [
                     executor.submit(
                         self._prepare_single_job,
@@ -671,7 +680,8 @@ class MutationScreeningRunner:
             result_cache.store(row)
             self._check_free_disk_or_raise(job.output_dir, job.min_free_disk_gb)
             logger.info(
-                "Finished %s in %.2fs (cache_hit=%s, sequence_cache_hits=%s, cleaned=%s)",
+                "Finished %s in %.2fs "
+                "(cache_hit=%s, sequence_cache_hits=%s, cleaned=%s)",
                 row.query_id,
                 row.total_seconds,
                 row.cache_hit,
@@ -709,7 +719,9 @@ class MutationScreeningRunner:
                         }
                     )
 
-    def _write_manifest(self, job: ScreeningJob, rows: list[ScreeningResultRow]) -> None:
+    def _write_manifest(
+        self, job: ScreeningJob, rows: list[ScreeningResultRow]
+    ) -> None:
         manifest = {
             "query_prefix": job.query_prefix,
             "output_policy": job.output_policy,

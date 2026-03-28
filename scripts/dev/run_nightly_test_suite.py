@@ -35,7 +35,12 @@ def log_line(message: str, log_path: Path) -> None:
         handle.write(line + "\n")
 
 
-def stream_command(cmd: list[str], cwd: Path, log_path: Path, step_name: str) -> None:
+def stream_command(
+    cmd: list[str],
+    cwd: Path,
+    log_path: Path,
+    step_name: str,
+) -> None:
     log_line(f"[{step_name}] START {' '.join(cmd)}", log_path)
     process = subprocess.Popen(
         cmd,
@@ -78,7 +83,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--leucine-query-json",
         type=Path,
-        default=Path("examples/example_inference_inputs/query_test_leucine_zipper.json"),
+        default=Path(
+            "examples/example_inference_inputs/query_test_leucine_zipper.json"
+        ),
         help="Base query JSON for leucine zipper saturation stage.",
     )
     parser.add_argument(
@@ -98,12 +105,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--runner-yaml",
         type=Path,
-        default=Path("examples/example_runner_yamls/nightly_metrics_only_low_mem.yml"),
+        default=Path(
+            "examples/example_runner_yamls/nightly_metrics_only_low_mem.yml"
+        ),
         help="Runner YAML used for both stages.",
     )
     parser.add_argument("--python-bin", type=str, default=sys.executable)
     parser.add_argument("--num-diffusion-samples", type=int, default=1)
     parser.add_argument("--num-model-seeds", type=int, default=1)
+    parser.add_argument("--comparison-tolerance", type=float, default=0.1)
     parser.add_argument("--num-cpu-workers", type=int, default=4)
     parser.add_argument("--max-inflight-queries", type=int, default=2)
     parser.add_argument("--min-free-disk-gb", type=float, default=2.0)
@@ -149,6 +159,8 @@ def main() -> None:
         str(args.num_diffusion_samples),
         "--num-model-seeds",
         str(args.num_model_seeds),
+        "--tolerance",
+        str(args.comparison_tolerance),
     ]
     if args.inference_ckpt_path is not None:
         comparison_cmd += ["--inference-ckpt-path", str(args.inference_ckpt_path)]
@@ -194,7 +206,12 @@ def main() -> None:
     if args.use_templates:
         leucine_cmd.append("--use-templates")
 
-    stream_command(comparison_cmd, cwd=repo_root, log_path=log_path, step_name="compare")
+    stream_command(
+        comparison_cmd,
+        cwd=repo_root,
+        log_path=log_path,
+        step_name="compare",
+    )
     stream_command(leucine_cmd, cwd=repo_root, log_path=log_path, step_name="leucine")
     log_line("[suite] ALL_DONE", log_path)
 

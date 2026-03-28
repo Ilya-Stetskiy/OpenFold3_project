@@ -11,12 +11,33 @@ DEFAULT_AMINO_ACIDS = "ACDEFGHIKLMNPQRSTVWY"
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Generate single-point saturation mutagenesis CSV for an OpenFold3 query."
+        description=(
+            "Generate single-point saturation mutagenesis CSV for an "
+            "OpenFold3 query."
+        )
     )
-    parser.add_argument("--query-json", type=Path, required=True, help="Path to OpenFold3 query JSON.")
-    parser.add_argument("--query-name", required=True, help="Query key inside the JSON file.")
-    parser.add_argument("--chain-id", required=True, help="Chain id to mutate, for example A.")
-    parser.add_argument("--output-csv", type=Path, required=True, help="Output CSV path.")
+    parser.add_argument(
+        "--query-json",
+        type=Path,
+        required=True,
+        help="Path to OpenFold3 query JSON.",
+    )
+    parser.add_argument(
+        "--query-name",
+        required=True,
+        help="Query key inside the JSON file.",
+    )
+    parser.add_argument(
+        "--chain-id",
+        required=True,
+        help="Chain id to mutate, for example A.",
+    )
+    parser.add_argument(
+        "--output-csv",
+        type=Path,
+        required=True,
+        help="Output CSV path.",
+    )
     parser.add_argument(
         "--amino-acids",
         default=DEFAULT_AMINO_ACIDS,
