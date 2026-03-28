@@ -639,6 +639,8 @@ class MutationScreeningRunner:
             queue.Queue(maxsize=max(1, job.max_inflight_queries))
         )
         entries = self._entries(job)
+        total_entries = len(entries)
+        completed_entries = 0
         rows: list[ScreeningResultRow] = []
 
         def producer() -> None:
@@ -666,9 +668,12 @@ class MutationScreeningRunner:
             item = prepared_queue.get()
             if item is None:
                 break
+            completed_entries += 1
             if isinstance(item, ScreeningResultRow):
                 logger.info(
-                    "Using cached result for %s (query_result_cache_hit=%s)",
+                    "Progress %s/%s: using cached result for %s (query_result_cache_hit=%s)",
+                    completed_entries,
+                    total_entries,
                     item.query_id,
                     item.query_result_cache_hit,
                 )
@@ -676,12 +681,20 @@ class MutationScreeningRunner:
                 continue
 
             self._check_free_disk_or_raise(job.output_dir, job.min_free_disk_gb)
+            logger.info(
+                "Progress %s/%s: launching %s",
+                completed_entries,
+                total_entries,
+                item.query_id,
+            )
             row = backend.run(item)
             result_cache.store(row)
             self._check_free_disk_or_raise(job.output_dir, job.min_free_disk_gb)
             logger.info(
-                "Finished %s in %.2fs "
+                "Progress %s/%s: finished %s in %.2fs "
                 "(cache_hit=%s, sequence_cache_hits=%s, cleaned=%s)",
+                completed_entries,
+                total_entries,
                 row.query_id,
                 row.total_seconds,
                 row.cache_hit,

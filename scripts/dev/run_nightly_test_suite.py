@@ -23,6 +23,8 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+from scripts.dev.runtime_monitor import RunMonitor
+
 
 def ts() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -133,87 +135,118 @@ def main() -> None:
     logs_dir = output_root / "logs"
     logs_dir.mkdir(parents=True, exist_ok=True)
     log_path = logs_dir / "nightly_suite.log"
+    monitor = RunMonitor(logs_dir)
+    monitor.start()
 
     comparison_out = output_root / "comparison"
     screening_out = output_root / "leucine_saturation"
 
-    log_line(f"[suite] output_root={output_root}", log_path)
-    log_line(f"[suite] log_file={log_path}", log_path)
-    log_line(
-        f"[suite] disk_guard_min_free_gb={args.min_free_disk_gb}",
-        log_path,
-    )
+    try:
+        log_line(f"[suite] output_root={output_root}", log_path)
+        log_line(f"[suite] log_file={log_path}", log_path)
+        log_line(
+            f"[suite] disk_guard_min_free_gb={args.min_free_disk_gb}",
+            log_path,
+        )
+        log_line(
+            f"[suite] monitoring_csv={monitor.artifacts.resource_csv_path}",
+            log_path,
+        )
+        log_line(
+            f"[suite] stage_marks_csv={monitor.artifacts.stage_marks_path}",
+            log_path,
+        )
+        log_line(
+            f"[suite] monitoring_png={monitor.artifacts.monitor_plot_path}",
+            log_path,
+        )
+        monitor.record_stage("suite_initialized", f"output_root={output_root}")
 
-    comparison_cmd = [
-        args.python_bin,
-        "scripts/dev/run_single_protein_comparison.py",
-        "--query-json",
-        str(args.comparison_query_json),
-        "--query-id",
-        args.comparison_query_id,
-        "--runner-yaml",
-        str(args.runner_yaml),
-        "--output-root",
-        str(comparison_out),
-        "--num-diffusion-samples",
-        str(args.num_diffusion_samples),
-        "--num-model-seeds",
-        str(args.num_model_seeds),
-        "--tolerance",
-        str(args.comparison_tolerance),
-    ]
-    if args.inference_ckpt_path is not None:
-        comparison_cmd += ["--inference-ckpt-path", str(args.inference_ckpt_path)]
-    if args.inference_ckpt_name is not None:
-        comparison_cmd += ["--inference-ckpt-name", args.inference_ckpt_name]
-    if args.use_msa_server:
-        comparison_cmd.append("--use-msa-server")
-    if args.use_templates:
-        comparison_cmd.append("--use-templates")
+        comparison_cmd = [
+            args.python_bin,
+            "scripts/dev/run_single_protein_comparison.py",
+            "--query-json",
+            str(args.comparison_query_json),
+            "--query-id",
+            args.comparison_query_id,
+            "--runner-yaml",
+            str(args.runner_yaml),
+            "--output-root",
+            str(comparison_out),
+            "--num-diffusion-samples",
+            str(args.num_diffusion_samples),
+            "--num-model-seeds",
+            str(args.num_model_seeds),
+            "--tolerance",
+            str(args.comparison_tolerance),
+        ]
+        if args.inference_ckpt_path is not None:
+            comparison_cmd += ["--inference-ckpt-path", str(args.inference_ckpt_path)]
+        if args.inference_ckpt_name is not None:
+            comparison_cmd += ["--inference-ckpt-name", args.inference_ckpt_name]
+        if args.use_msa_server:
+            comparison_cmd.append("--use-msa-server")
+        if args.use_templates:
+            comparison_cmd.append("--use-templates")
 
-    leucine_cmd = [
-        args.python_bin,
-        "scripts/dev/run_overnight_screening.py",
-        "--base-query-json",
-        str(args.leucine_query_json),
-        "--query-id",
-        args.leucine_query_id,
-        "--mutations-csv",
-        str(args.mutations_csv),
-        "--output-root",
-        str(screening_out),
-        "--runner-yaml",
-        str(args.runner_yaml),
-        "--num-diffusion-samples",
-        str(args.num_diffusion_samples),
-        "--num-model-seeds",
-        str(args.num_model_seeds),
-        "--num-cpu-workers",
-        str(args.num_cpu_workers),
-        "--max-inflight-queries",
-        str(args.max_inflight_queries),
-        "--min-free-disk-gb",
-        str(args.min_free_disk_gb),
-    ]
-    if args.inference_ckpt_path is not None:
-        leucine_cmd += ["--inference-ckpt-path", str(args.inference_ckpt_path)]
-    if args.inference_ckpt_name is not None:
-        leucine_cmd += ["--inference-ckpt-name", args.inference_ckpt_name]
-    if args.include_wt:
-        leucine_cmd.append("--include-wt")
-    if args.use_msa_server:
-        leucine_cmd.append("--use-msa-server")
-    if args.use_templates:
-        leucine_cmd.append("--use-templates")
+        leucine_cmd = [
+            args.python_bin,
+            "scripts/dev/run_overnight_screening.py",
+            "--base-query-json",
+            str(args.leucine_query_json),
+            "--query-id",
+            args.leucine_query_id,
+            "--mutations-csv",
+            str(args.mutations_csv),
+            "--output-root",
+            str(screening_out),
+            "--runner-yaml",
+            str(args.runner_yaml),
+            "--num-diffusion-samples",
+            str(args.num_diffusion_samples),
+            "--num-model-seeds",
+            str(args.num_model_seeds),
+            "--num-cpu-workers",
+            str(args.num_cpu_workers),
+            "--max-inflight-queries",
+            str(args.max_inflight_queries),
+            "--min-free-disk-gb",
+            str(args.min_free_disk_gb),
+        ]
+        if args.inference_ckpt_path is not None:
+            leucine_cmd += ["--inference-ckpt-path", str(args.inference_ckpt_path)]
+        if args.inference_ckpt_name is not None:
+            leucine_cmd += ["--inference-ckpt-name", args.inference_ckpt_name]
+        if args.include_wt:
+            leucine_cmd.append("--include-wt")
+        if args.use_msa_server:
+            leucine_cmd.append("--use-msa-server")
+        if args.use_templates:
+            leucine_cmd.append("--use-templates")
 
-    stream_command(
-        comparison_cmd,
-        cwd=repo_root,
-        log_path=log_path,
-        step_name="compare",
-    )
-    stream_command(leucine_cmd, cwd=repo_root, log_path=log_path, step_name="leucine")
-    log_line("[suite] ALL_DONE", log_path)
+        monitor.record_stage("compare_started")
+        stream_command(
+            comparison_cmd,
+            cwd=repo_root,
+            log_path=log_path,
+            step_name="compare",
+        )
+        monitor.record_stage("compare_finished")
+        monitor.record_stage("leucine_started")
+        stream_command(
+            leucine_cmd,
+            cwd=repo_root,
+            log_path=log_path,
+            step_name="leucine",
+        )
+        monitor.record_stage("leucine_finished")
+        log_line("[suite] ALL_DONE", log_path)
+        monitor.record_stage("suite_finished")
+    except Exception as exc:
+        monitor.record_stage("suite_failed", str(exc))
+        raise
+    finally:
+        monitor.stop()
 
 
 if __name__ == "__main__":
