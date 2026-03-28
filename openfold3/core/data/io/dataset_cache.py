@@ -191,6 +191,7 @@ def read_datacache(
         type_key = "_type".encode(str_encoding)
         with lmdb_env.begin() as txn:
             dataset_cache_type = json.loads(txn.get(type_key).decode(str_encoding))
+        lmdb_env.close()
 
         if not dataset_cache_type:
             raise ValueError("No type found for this directory.")
