@@ -26,7 +26,7 @@ import subprocess
 import sys
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
@@ -60,6 +60,10 @@ def _json_default(value: Any):
     if isinstance(value, Path):
         return str(value)
     raise TypeError(f"Object of type {type(value)!r} is not JSON serializable")
+
+
+def _metric_or_default(value: Any, default: float) -> float:
+    return default if value is None else value
 
 
 def apply_point_mutation(
@@ -366,11 +370,11 @@ class SubprocessOpenFoldBackend:
         def sort_key(item: dict[str, Any]):
             return (
                 item.get("sample_ranking_score") is not None,
-                item.get("sample_ranking_score") or float("-inf"),
-                item.get("iptm") or float("-inf"),
-                item.get("ptm") or float("-inf"),
-                item.get("avg_plddt") or float("-inf"),
-                -(item.get("gpde") or float("inf")),
+                _metric_or_default(item.get("sample_ranking_score"), float("-inf")),
+                _metric_or_default(item.get("iptm"), float("-inf")),
+                _metric_or_default(item.get("ptm"), float("-inf")),
+                _metric_or_default(item.get("avg_plddt"), float("-inf")),
+                -_metric_or_default(item.get("gpde"), float("inf")),
             )
 
         return max(rows, key=sort_key)
@@ -635,7 +639,9 @@ class MutationScreeningRunner:
         self._register_base_chain_cache(job.base_query, sequence_cache)
 
         backend = self.backend or SubprocessOpenFoldBackend(job)
-        prepared_queue: queue.Queue[PreparedMutationJob | ScreeningResultRow | None] = (
+        prepared_queue: queue.Queue[
+            PreparedMutationJob | ScreeningResultRow | BaseException | None
+        ] = (
             queue.Queue(maxsize=max(1, job.max_inflight_queries))
         )
         entries = self._entries(job)
@@ -644,22 +650,26 @@ class MutationScreeningRunner:
         rows: list[ScreeningResultRow] = []
 
         def producer() -> None:
-            with ThreadPoolExecutor(
-                max_workers=max(1, job.num_cpu_workers)
-            ) as executor:
-                futures = [
-                    executor.submit(
-                        self._prepare_single_job,
-                        job,
-                        mutation_spec,
-                        sequence_cache,
-                        result_cache,
-                    )
-                    for mutation_spec in entries
-                ]
-                for future in futures:
-                    prepared_queue.put(future.result())
-            prepared_queue.put(None)
+            try:
+                with ThreadPoolExecutor(
+                    max_workers=max(1, job.num_cpu_workers)
+                ) as executor:
+                    futures = [
+                        executor.submit(
+                            self._prepare_single_job,
+                            job,
+                            mutation_spec,
+                            sequence_cache,
+                            result_cache,
+                        )
+                        for mutation_spec in entries
+                    ]
+                    for future in as_completed(futures):
+                        prepared_queue.put(future.result())
+            except BaseException as exc:
+                prepared_queue.put(exc)
+            finally:
+                prepared_queue.put(None)
 
         producer_thread = threading.Thread(target=producer, daemon=True)
         producer_thread.start()
@@ -668,6 +678,8 @@ class MutationScreeningRunner:
             item = prepared_queue.get()
             if item is None:
                 break
+            if isinstance(item, BaseException):
+                raise item
             completed_entries += 1
             if isinstance(item, ScreeningResultRow):
                 logger.info(

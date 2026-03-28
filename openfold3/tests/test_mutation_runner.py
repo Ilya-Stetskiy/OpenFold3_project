@@ -20,6 +20,7 @@ from openfold3.mutation_runner import (
     MutationSpec,
     ScreeningJob,
     ScreeningResultRow,
+    SubprocessOpenFoldBackend,
     apply_point_mutation,
     sequence_hash,
 )
@@ -78,6 +79,73 @@ def test_apply_point_mutation():
 def test_sequence_hash_is_stable():
     assert sequence_hash("ACDE") == sequence_hash("ACDE")
     assert sequence_hash("ACDE") != sequence_hash("AGDE")
+
+
+def test_parse_best_summary_row_keeps_zero_metrics(tmp_path):
+    summary_path = tmp_path / "summary.jsonl"
+    summary_path.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "query_id": "demo",
+                        "sample_ranking_score": 0.0,
+                        "iptm": 0.0,
+                        "ptm": 0.0,
+                        "avg_plddt": 0.0,
+                        "gpde": 0.0,
+                    }
+                ),
+                json.dumps(
+                    {
+                        "query_id": "demo",
+                        "sample_ranking_score": -1.0,
+                        "iptm": -1.0,
+                        "ptm": -1.0,
+                        "avg_plddt": -1.0,
+                        "gpde": 5.0,
+                    }
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    best = SubprocessOpenFoldBackend.__new__(SubprocessOpenFoldBackend)._parse_best_summary_row(
+        summary_path, "demo"
+    )
+
+    assert best["sample_ranking_score"] == 0.0
+    assert best["gpde"] == 0.0
+
+
+def test_mutation_screening_runner_raises_for_unknown_mutation_chain(tmp_path):
+    base_query = Query.model_validate(
+        {
+            "chains": [
+                {"molecule_type": "protein", "chain_ids": ["A"], "sequence": "ACDE"},
+            ]
+        }
+    )
+    job = ScreeningJob(
+        base_query=base_query,
+        mutations=[
+            MutationSpec(chain_id="B", position_1based=2, from_residue="C", to_residue="G")
+        ],
+        output_dir=tmp_path / "screening",
+        cache_dir=tmp_path / "cache",
+        include_wt=False,
+        num_cpu_workers=1,
+        max_inflight_queries=1,
+    )
+
+    try:
+        MutationScreeningRunner(backend=FakeBackend()).run(job)
+    except ValueError as exc:
+        assert "Could not find mutable protein chain B" in str(exc)
+    else:
+        raise AssertionError("Expected ValueError for unknown mutation chain")
 
 
 def test_mutation_screening_runner_uses_sequence_cache_and_result_resume(tmp_path):
