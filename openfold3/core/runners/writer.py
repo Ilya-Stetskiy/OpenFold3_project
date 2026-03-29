@@ -16,6 +16,7 @@
 
 import json
 import logging
+import time
 from pathlib import Path
 from typing import Any
 
@@ -29,6 +30,16 @@ from openfold3.core.data.io.structure.cif import write_structure
 from openfold3.core.utils.tensor_utils import tensor_tree_map
 
 logger = logging.getLogger(__name__)
+
+
+def _batch_bool_flags(value) -> list[bool]:
+    if value is None:
+        return []
+    if isinstance(value, torch.Tensor):
+        return [bool(v) for v in value.detach().cpu().reshape(-1).tolist()]
+    if isinstance(value, (list, tuple)):
+        return [bool(v) for v in value]
+    return [bool(value)]
 
 
 class NumpyEncoder(json.JSONEncoder):
@@ -328,8 +339,14 @@ class OF3OutputWriter(BasePredictionWriter):
         dataloader_idx=0,
     ):
         # Skip repeated samples
-        if batch.get("repeated_sample"):
+        repeated_flags = _batch_bool_flags(batch.get("repeated_sample"))
+        if repeated_flags and all(repeated_flags):
             return
+        if repeated_flags and any(repeated_flags):
+            raise ValueError(
+                "Mixed repeated/non-repeated samples in an output-writing batch are "
+                "not supported. Re-run with data_module_args.batch_size=1 for this input."
+            )
 
         self.total_count += 1
 
@@ -345,10 +362,18 @@ class OF3OutputWriter(BasePredictionWriter):
         # Write predictions and confidence scores
         # Optionally write out input features and latent outputs
         try:
+            write_started = time.perf_counter()
             self.write_all_outputs(
                 batch=batch,
                 outputs=outputs,
                 confidence_scores=confidence_scores,
+            )
+            write_seconds = time.perf_counter() - write_started
+            logger.info(
+                "Writer timings for query_id(s) %s: batch_size=%s write=%.2fs",
+                ", ".join(batch["query_id"]),
+                len(batch["query_id"]),
+                write_seconds,
             )
             self.success_count += 1
         except Exception as e:

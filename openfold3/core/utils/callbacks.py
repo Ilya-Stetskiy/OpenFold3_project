@@ -29,6 +29,16 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 
+def _batch_bool_flags(value) -> list[bool]:
+    if value is None:
+        return []
+    if isinstance(value, torch.Tensor):
+        return [bool(v) for v in value.detach().cpu().reshape(-1).tolist()]
+    if isinstance(value, (list, tuple)):
+        return [bool(v) for v in value]
+    return [bool(value)]
+
+
 class PredictTimer(pl.Callback):
     def __init__(self, output_dir: Path):
         super().__init__()
@@ -64,7 +74,15 @@ class PredictTimer(pl.Callback):
         runtime = self._get_runtime()
 
         # Skip repeated samples
-        if batch.get("repeated_sample") or outputs is None:
+        repeated_flags = _batch_bool_flags(batch.get("repeated_sample"))
+        if repeated_flags and all(repeated_flags):
+            return
+        if repeated_flags and any(repeated_flags):
+            raise ValueError(
+                "Mixed repeated/non-repeated samples in a predict-timer batch are "
+                "not supported. Re-run with data_module_args.batch_size=1 for this input."
+            )
+        if outputs is None:
             return
 
         batch_size = len(batch["atom_array"])
@@ -79,6 +97,7 @@ class PredictTimer(pl.Callback):
             query_id = batch["query_id"][b]
 
             output_subdir = Path(self.output_dir) / query_id / f"seed_{seed}"
+            output_subdir.mkdir(parents=True, exist_ok=True)
 
             # Save runtime for the batch
             runtime_file = output_subdir / "timing.json"
