@@ -99,6 +99,67 @@ def test_run_screened_mutation_scan_builds_job_and_parses_results(
     assert not result.mutation_ranking.empty
 
 
+def test_run_screened_mutation_scan_falls_back_to_installed_runner_without_repo_checkout(
+    big_ace_molecules: list[dict],
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    runtime = RuntimeConfig(
+        results_dir=tmp_path / "results",
+        openfold_prefix=tmp_path / "prefix",
+        openfold_repo_dir=tmp_path / "missing-openfold-3",
+        project_dir=tmp_path / "project",
+    )
+    runtime.project_dir.mkdir(parents=True)
+    runtime.openfold_runner.parent.mkdir(parents=True)
+    runtime.openfold_runner.write_text("#!/bin/sh\n", encoding="utf-8")
+
+    captured = {}
+
+    def fake_run(cmd, *, env, cwd, log_path):
+        del env
+        job_json_path = Path(cmd[-1])
+        job = json.loads(job_json_path.read_text(encoding="utf-8"))
+        output_dir = Path(job["output_dir"])
+        output_dir.mkdir(parents=True, exist_ok=True)
+        (output_dir / "results.jsonl").write_text(
+            json.dumps(
+                {
+                    "mutation_id": "WT",
+                    "query_id": "scan_case_WT",
+                    "sample_ranking_score": 0.9,
+                    "iptm": 0.8,
+                    "ptm": 0.7,
+                    "avg_plddt": 90.0,
+                    "gpde": 0.1,
+                    "has_clash": 0.0,
+                    "total_seconds": 0.6,
+                    "query_result_cache_hit": False,
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        log_path.write_text("ok\n", encoding="utf-8")
+        captured["cwd"] = cwd
+        return 0, 1.0
+
+    monkeypatch.setattr("of_notebook_lib.screening._run_timed_cmd", fake_run)
+
+    result = run_screened_mutation_scan(
+        runtime=runtime,
+        experiment_name="scan_case",
+        molecules=big_ace_molecules,
+        mutation_chain_id="B",
+        position_1based=4,
+        amino_acids="FG",
+        include_wt=True,
+    )
+
+    assert result.return_code == 0
+    assert captured["cwd"] == runtime.project_dir.resolve()
+
+
 def test_compare_mutation_batch_approaches_writes_speedup_summary(
     big_ace_molecules: list[dict],
     monkeypatch,

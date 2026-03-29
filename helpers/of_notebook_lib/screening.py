@@ -67,7 +67,7 @@ def _run_timed_cmd(
     cmd: list[str],
     *,
     env: dict[str, str],
-    cwd: Path,
+    cwd: Path | None,
     log_path: Path,
 ) -> tuple[int, float]:
     started = time.perf_counter()
@@ -91,15 +91,22 @@ def _run_timed_cmd(
 def _resolve_openfold_repo_dir(
     runtime: RuntimeConfig,
     repo_dir: str | Path | None = None,
-) -> Path:
+) -> Path | None:
     resolved = Path(repo_dir) if repo_dir is not None else runtime.openfold_repo_dir
     resolved = resolved.expanduser().resolve()
     expected = resolved / "openfold3" / "run_openfold.py"
+    if expected.exists():
+        return resolved
+    if repo_dir is None:
+        runner = runtime.openfold_runner
+        if runner.exists():
+            return runtime.project_dir.resolve()
+        return None
     if not expected.exists():
         raise FileNotFoundError(
             f"OPENFOLD_REPO_DIR does not look like an openfold-3 checkout: {resolved}"
         )
-    return resolved
+    return None
 
 
 def _mutation_specs_for_position(
