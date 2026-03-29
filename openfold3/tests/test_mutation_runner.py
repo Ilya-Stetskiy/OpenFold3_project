@@ -14,6 +14,7 @@
 
 import csv
 import json
+import time
 from pathlib import Path
 
 from openfold3.mutation_runner import (
@@ -96,6 +97,32 @@ class BatchRecordingBackend:
             _result_row_from_prepared_job(prepared_job)
             for prepared_job in prepared_jobs
         ]
+
+
+class SlowPrepareRunner(MutationScreeningRunner):
+    def __init__(self, delays_by_mutation_id, backend):
+        super().__init__(backend=backend)
+        self.delays_by_mutation_id = delays_by_mutation_id
+
+    def _prepare_single_job(
+        self,
+        job,
+        mutation_spec,
+        sequence_cache,
+        result_cache,
+        mutable_chain_ids,
+    ):
+        mutation_id = "WT" if mutation_spec is None else mutation_spec.mutation_id
+        delay_seconds = self.delays_by_mutation_id.get(mutation_id, 0.0)
+        if delay_seconds > 0:
+            time.sleep(delay_seconds)
+        return super()._prepare_single_job(
+            job,
+            mutation_spec,
+            sequence_cache,
+            result_cache,
+            mutable_chain_ids,
+        )
 
 
 def test_apply_point_mutation():
@@ -962,3 +989,50 @@ def test_mutation_screening_runner_batches_prepared_jobs_when_configured(tmp_pat
     assert max(backend.batch_sizes) == 2
     assert any(batch_size > 1 for batch_size in backend.batch_sizes)
     assert manifest["subprocess_batch_size"] == 2
+
+
+def test_mutation_screening_runner_dispatches_partial_batch_after_timeout(tmp_path):
+    base_query = Query.model_validate(
+        {
+            "chains": [
+                {"molecule_type": "protein", "chain_ids": ["A"], "sequence": "ACDEFG"},
+            ]
+        }
+    )
+
+    mutations = [
+        MutationSpec(chain_id="A", position_1based=2, from_residue="C", to_residue="G"),
+        MutationSpec(chain_id="A", position_1based=3, from_residue="D", to_residue="Y"),
+        MutationSpec(chain_id="A", position_1based=4, from_residue="E", to_residue="K"),
+    ]
+    job = ScreeningJob(
+        base_query=base_query,
+        mutations=mutations,
+        output_dir=tmp_path / "screening",
+        cache_dir=tmp_path / "cache",
+        include_wt=False,
+        output_policy="metrics_only",
+        subprocess_batch_size=3,
+        dispatch_partial_batches=True,
+        batch_gather_timeout_seconds=0.01,
+        num_cpu_workers=1,
+        max_inflight_queries=1,
+    )
+    backend = BatchRecordingBackend()
+    runner = SlowPrepareRunner(
+        delays_by_mutation_id={
+            mutations[0].mutation_id: 0.0,
+            mutations[1].mutation_id: 0.05,
+            mutations[2].mutation_id: 0.05,
+        },
+        backend=backend,
+    )
+
+    rows = runner.run(job)
+    manifest = json.loads((job.output_dir / "screening_manifest.json").read_text())
+
+    assert len(rows) == 3
+    assert backend.run_calls == 0
+    assert backend.batch_sizes[0] == 1
+    assert manifest["dispatch_partial_batches"] is True
+    assert manifest["batch_gather_timeout_seconds"] == 0.01

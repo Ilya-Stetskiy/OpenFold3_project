@@ -159,6 +159,8 @@ class ScreeningJob:
     num_cpu_workers: int = 4
     max_inflight_queries: int = 4
     subprocess_batch_size: int = 1
+    dispatch_partial_batches: bool = False
+    batch_gather_timeout_seconds: float = BATCH_GATHER_TIMEOUT_SECONDS
     num_diffusion_samples: int | None = None
     num_model_seeds: int | None = None
     runner_yaml: Path | None = None
@@ -854,6 +856,7 @@ class MutationScreeningRunner:
         rows: list[ScreeningResultRow] = []
         pending_prepared_jobs: list[PreparedMutationJob] = []
         batch_size = max(1, job.subprocess_batch_size)
+        gather_timeout_seconds = max(0.0, job.batch_gather_timeout_seconds)
         producer_finished = False
 
         def producer() -> None:
@@ -903,17 +906,31 @@ class MutationScreeningRunner:
 
         while not producer_finished:
             handle_item(prepared_queue.get())
+            timed_out_waiting_for_more = False
             while not producer_finished and len(pending_prepared_jobs) < batch_size:
                 try:
                     handle_item(
-                        prepared_queue.get(timeout=BATCH_GATHER_TIMEOUT_SECONDS)
+                        prepared_queue.get(timeout=gather_timeout_seconds)
                     )
                 except queue.Empty:
+                    timed_out_waiting_for_more = True
                     break
+            should_dispatch_partial_batch = (
+                job.dispatch_partial_batches
+                and timed_out_waiting_for_more
+                and len(pending_prepared_jobs) > 0
+            )
             if pending_prepared_jobs and (
                 producer_finished
                 or len(pending_prepared_jobs) >= batch_size
+                or should_dispatch_partial_batch
             ):
+                if should_dispatch_partial_batch:
+                    logger.info(
+                        "Dispatching partial batch of %s query(s) after %.2fs gather timeout",
+                        len(pending_prepared_jobs),
+                        gather_timeout_seconds,
+                    )
                 self._run_prepared_jobs(
                     job,
                     backend,
@@ -966,6 +983,8 @@ class MutationScreeningRunner:
             "run_baseline_first": job.run_baseline_first,
             "cache_query_results": job.cache_query_results,
             "subprocess_batch_size": max(1, job.subprocess_batch_size),
+            "dispatch_partial_batches": job.dispatch_partial_batches,
+            "batch_gather_timeout_seconds": job.batch_gather_timeout_seconds,
             "rows_written": len(rows),
             "results_jsonl": str(job.output_dir / "results.jsonl"),
             "results_csv": str(job.output_dir / "results.csv"),
