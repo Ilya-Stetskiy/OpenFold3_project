@@ -166,6 +166,70 @@ def test_run_screened_mutation_scan_falls_back_to_installed_runner_without_repo_
     assert captured["cwd"] == runtime.project_dir.resolve()
 
 
+def test_run_screened_mutation_scan_accepts_repo_dir_with_package_only(
+    big_ace_molecules: list[dict],
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    repo_root = tmp_path / "project_root"
+    (repo_root / "openfold3").mkdir(parents=True)
+    runtime = RuntimeConfig(
+        results_dir=tmp_path / "results",
+        openfold_prefix=tmp_path / "prefix",
+        project_dir=repo_root,
+    )
+
+    captured = {}
+
+    def fake_run(cmd, *, env, cwd, log_path):
+        del env
+        del cmd
+        output_dir = runtime.results_dir / "scan_case_screening_0000" / "screening"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        (output_dir / "results.jsonl").write_text(
+            json.dumps(
+                {
+                    "mutation_id": "WT",
+                    "query_id": "scan_case_WT",
+                    "sample_ranking_score": 0.9,
+                    "iptm": 0.8,
+                    "ptm": 0.7,
+                    "avg_plddt": 90.0,
+                    "gpde": 0.1,
+                    "has_clash": 0.0,
+                    "total_seconds": 0.6,
+                    "query_result_cache_hit": False,
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        log_path.write_text("ok\n", encoding="utf-8")
+        captured["cwd"] = cwd
+        return 0, 1.0
+
+    monkeypatch.setattr("of_notebook_lib.screening._run_timed_cmd", fake_run)
+    monkeypatch.setattr(
+        "of_notebook_lib.screening._slug_timestamp",
+        lambda name: f"{name}_0000",
+    )
+    monkeypatch.chdir(repo_root)
+
+    result = run_screened_mutation_scan(
+        runtime=runtime,
+        experiment_name="scan_case",
+        molecules=big_ace_molecules,
+        mutation_chain_id="B",
+        position_1based=4,
+        amino_acids="FG",
+        include_wt=True,
+        repo_dir=".",
+    )
+
+    assert result.return_code == 0
+    assert captured["cwd"] == repo_root.resolve()
+
+
 def test_compare_mutation_batch_approaches_writes_speedup_summary(
     big_ace_molecules: list[dict],
     monkeypatch,

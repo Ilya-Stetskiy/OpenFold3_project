@@ -94,8 +94,9 @@ def _resolve_openfold_repo_dir(
 ) -> Path | None:
     resolved = Path(repo_dir) if repo_dir is not None else runtime.openfold_repo_dir
     resolved = resolved.expanduser().resolve()
-    expected = resolved / "openfold3" / "run_openfold.py"
-    if expected.exists():
+    package_dir = resolved / "openfold3"
+    expected = package_dir / "run_openfold.py"
+    if expected.exists() or package_dir.is_dir():
         return resolved
     if repo_dir is None:
         runner = runtime.openfold_runner
