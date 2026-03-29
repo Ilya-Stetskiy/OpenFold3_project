@@ -93,6 +93,8 @@ def test_run_screened_mutation_scan_builds_job_and_parses_results(
         include_wt=True,
         cache_query_results=False,
         subprocess_batch_size=4,
+        runner_yaml=Path("configs/low_mem.yml"),
+        output_policy="full",
     )
 
     job = json.loads(result.job_json_path.read_text(encoding="utf-8"))
@@ -101,6 +103,10 @@ def test_run_screened_mutation_scan_builds_job_and_parses_results(
     assert job["mutations"][0]["chain_id"] == "B"
     assert job["cache_query_results"] is False
     assert job["subprocess_batch_size"] == 4
+    assert job["output_policy"] == "full"
+    assert job["cleanup_query_outputs"] is False
+    assert Path(job["runner_yaml"]).name == "low_mem.yml"
+    assert Path(job["runner_yaml"]).is_absolute()
     assert set(result.rows_df["mutation_label"]) == {"WT", "B_F4G"}
     assert not result.mutation_ranking.empty
 
@@ -288,6 +294,8 @@ def test_compare_mutation_batch_approaches_writes_speedup_summary(
         amino_acids="FG",
         cache_query_results=False,
         subprocess_batch_size=8,
+        screening_output_policy="full",
+        keep_screening_query_outputs=True,
     )
 
     assert isinstance(result, BatchApproachComparison)
@@ -295,6 +303,8 @@ def test_compare_mutation_batch_approaches_writes_speedup_summary(
     assert result.comparison["time_saved_seconds"] == 8.0
     assert result.comparison["cache_query_results"] is False
     assert result.comparison["subprocess_batch_size"] == 8
+    assert result.comparison["screening_output_policy"] == "full"
+    assert result.comparison["keep_screening_query_outputs"] is True
     assert result.summary_path.exists()
 
 
@@ -346,6 +356,8 @@ def test_run_server_end_to_end_smoke_writes_summary(
         amino_acids="FG",
         cache_query_results=False,
         subprocess_batch_size=6,
+        screening_output_policy="full",
+        keep_screening_query_outputs=True,
     )
 
     assert result.gpu_probe["available"] is True
@@ -355,6 +367,8 @@ def test_run_server_end_to_end_smoke_writes_summary(
     assert summary["screening_elapsed_seconds"] == 7.0
     assert summary["cache_query_results"] is False
     assert summary["subprocess_batch_size"] == 6
+    assert summary["screening_output_policy"] == "full"
+    assert summary["keep_screening_query_outputs"] is True
 
 
 def test_run_compare_mutation_batch_script_invokes_workflow(
@@ -402,6 +416,9 @@ def test_run_compare_mutation_batch_script_invokes_workflow(
             "FG",
             "--subprocess-batch-size",
             "8",
+            "--screening-output-policy",
+            "full",
+            "--keep-screening-query-outputs",
             "--no-query-result-cache",
         ],
     )
@@ -421,4 +438,6 @@ def test_run_compare_mutation_batch_script_invokes_workflow(
     assert captured["position_1based"] == 4
     assert captured["cache_query_results"] is False
     assert captured["subprocess_batch_size"] == 8
+    assert captured["screening_output_policy"] == "full"
+    assert captured["keep_screening_query_outputs"] is True
     assert "summary_path=" in stdout

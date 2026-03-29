@@ -123,6 +123,8 @@ def run_screened_mutation_case(
     repo_dir: str | None = None,
     cache_query_results: bool = True,
     subprocess_batch_size: int = 1,
+    output_policy: str = "metrics_only",
+    keep_query_outputs: bool | None = None,
 ) -> ScreeningBatchResult:
     return run_screened_mutation_scan(
         runtime=runtime,
@@ -142,6 +144,8 @@ def run_screened_mutation_case(
         repo_dir=repo_dir,
         cache_query_results=cache_query_results,
         subprocess_batch_size=subprocess_batch_size,
+        output_policy=output_policy,
+        keep_query_outputs=keep_query_outputs,
     )
 
 
@@ -164,6 +168,8 @@ def compare_mutation_batch_case(
     repo_dir: str | None = None,
     cache_query_results: bool = True,
     subprocess_batch_size: int = 1,
+    screening_output_policy: str = "metrics_only",
+    keep_screening_query_outputs: bool | None = None,
 ) -> BatchApproachComparison:
     return compare_mutation_batch_approaches(
         runtime=runtime,
@@ -183,6 +189,8 @@ def compare_mutation_batch_case(
         repo_dir=repo_dir,
         cache_query_results=cache_query_results,
         subprocess_batch_size=subprocess_batch_size,
+        screening_output_policy=screening_output_policy,
+        keep_screening_query_outputs=keep_screening_query_outputs,
     )
 
 
@@ -206,6 +214,8 @@ def run_server_end_to_end_case(
     run_screening: bool = True,
     cache_query_results: bool = True,
     subprocess_batch_size: int = 1,
+    screening_output_policy: str = "metrics_only",
+    keep_screening_query_outputs: bool | None = None,
 ) -> ServerEndToEndResult:
     return run_server_end_to_end_smoke(
         runtime=runtime,
@@ -226,4 +236,6 @@ def run_server_end_to_end_case(
         run_screening=run_screening,
         cache_query_results=cache_query_results,
         subprocess_batch_size=subprocess_batch_size,
+        screening_output_policy=screening_output_policy,
+        keep_screening_query_outputs=keep_screening_query_outputs,
     )

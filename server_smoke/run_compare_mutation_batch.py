@@ -38,6 +38,8 @@ def main() -> None:
     parser.add_argument("--num-diffusion-samples", type=int, default=1)
     parser.add_argument("--num-model-seeds", type=int, default=1)
     parser.add_argument("--subprocess-batch-size", type=int, default=1)
+    parser.add_argument("--screening-output-policy", type=str, default="metrics_only")
+    parser.add_argument("--keep-screening-query-outputs", action="store_true")
     parser.add_argument("--use-templates", action="store_true")
     parser.add_argument("--no-msa-server", action="store_true")
     parser.add_argument("--exclude-wt", action="store_true")
@@ -68,6 +70,8 @@ def main() -> None:
         repo_dir=args.repo_dir,
         cache_query_results=not args.no_query_result_cache,
         subprocess_batch_size=args.subprocess_batch_size,
+        screening_output_policy=args.screening_output_policy,
+        keep_screening_query_outputs=args.keep_screening_query_outputs,
     )
     print(f"summary_path={result.summary_path}")
     print(json.dumps(result.comparison, indent=2))

@@ -190,7 +190,8 @@ def run_screened_mutation_scan(
     inference_ckpt_path: str | Path | None = None,
     inference_ckpt_name: str | None = None,
     repo_dir: str | Path | None = None,
-    keep_query_outputs: bool = False,
+    keep_query_outputs: bool | None = None,
+    output_policy: str = "metrics_only",
     num_cpu_workers: int = 1,
     max_inflight_queries: int = 1,
     cache_query_results: bool = True,
@@ -203,6 +204,17 @@ def run_screened_mutation_scan(
     log_path = run_dir / "screen_mutations.log"
     summary_path = run_dir / "screening_summary.json"
     job_json_path = run_dir / "screening_job.json"
+
+    resolved_runner_yaml = (
+        Path(runner_yaml).expanduser().resolve() if runner_yaml else None
+    )
+    resolved_inference_ckpt_path = (
+        Path(inference_ckpt_path).expanduser().resolve()
+        if inference_ckpt_path
+        else None
+    )
+    if keep_query_outputs is None:
+        keep_query_outputs = output_policy != "metrics_only"
 
     mutation_specs, _ = _mutation_specs_for_position(
         molecules,
@@ -222,7 +234,7 @@ def run_screened_mutation_scan(
         "run_baseline_first": True,
         "msa_policy": "reuse_precomputed",
         "template_policy": "reuse_precomputed",
-        "output_policy": "metrics_only",
+        "output_policy": output_policy,
         "resume": True,
         "cache_query_results": cache_query_results,
         "num_cpu_workers": num_cpu_workers,
@@ -230,10 +242,10 @@ def run_screened_mutation_scan(
         "subprocess_batch_size": max(1, subprocess_batch_size),
         "num_diffusion_samples": num_diffusion_samples,
         "num_model_seeds": num_model_seeds,
-        "runner_yaml": str(Path(runner_yaml)) if runner_yaml else None,
-        "inference_ckpt_path": str(Path(inference_ckpt_path))
-        if inference_ckpt_path
-        else None,
+        "runner_yaml": str(resolved_runner_yaml) if resolved_runner_yaml else None,
+        "inference_ckpt_path": (
+            str(resolved_inference_ckpt_path) if resolved_inference_ckpt_path else None
+        ),
         "inference_ckpt_name": inference_ckpt_name,
         "use_msa_server": use_msa_server,
         "use_templates": use_templates,
@@ -282,6 +294,8 @@ def run_screened_mutation_scan(
         "elapsed_seconds": elapsed_seconds,
         "cache_query_results": cache_query_results,
         "subprocess_batch_size": max(1, subprocess_batch_size),
+        "output_policy": output_policy,
+        "keep_query_outputs": keep_query_outputs,
         "row_count": int(len(rows_df)),
         "mutation_summary_count": int(len(mutation_summary)),
         "query_result_cache_hits": int(
@@ -327,6 +341,8 @@ def compare_mutation_batch_approaches(
     repo_dir: str | Path | None = None,
     cache_query_results: bool = True,
     subprocess_batch_size: int = 1,
+    screening_output_policy: str = "metrics_only",
+    keep_screening_query_outputs: bool | None = None,
 ) -> BatchApproachComparison:
     payload = build_mutation_scan_payload(
         query_prefix=experiment_name,
@@ -366,6 +382,8 @@ def compare_mutation_batch_approaches(
         repo_dir=repo_dir,
         cache_query_results=cache_query_results,
         subprocess_batch_size=subprocess_batch_size,
+        output_policy=screening_output_policy,
+        keep_query_outputs=keep_screening_query_outputs,
     )
 
     run_dir = runtime.results_dir / _slug_timestamp(f"{experiment_name}_compare")
@@ -384,6 +402,12 @@ def compare_mutation_batch_approaches(
         "screen_mutations_internal_total_seconds": screening_internal_total,
         "cache_query_results": cache_query_results,
         "subprocess_batch_size": max(1, subprocess_batch_size),
+        "screening_output_policy": screening_output_policy,
+        "keep_screening_query_outputs": (
+            keep_screening_query_outputs
+            if keep_screening_query_outputs is not None
+            else screening_output_policy != "metrics_only"
+        ),
         "screen_mutations_query_result_cache_hits": int(
             screening_result.rows_df.get("query_result_cache_hit", pd.Series(dtype=bool)).sum()
         )
@@ -441,6 +465,8 @@ def run_server_end_to_end_smoke(
     run_screening: bool = True,
     cache_query_results: bool = True,
     subprocess_batch_size: int = 1,
+    screening_output_policy: str = "metrics_only",
+    keep_screening_query_outputs: bool | None = None,
 ) -> ServerEndToEndResult:
     gpu_probe = _probe_gpu()
     single_result = run_prediction(
@@ -476,6 +502,8 @@ def run_server_end_to_end_smoke(
             repo_dir=repo_dir,
             cache_query_results=cache_query_results,
             subprocess_batch_size=subprocess_batch_size,
+            output_policy=screening_output_policy,
+            keep_query_outputs=keep_screening_query_outputs,
         )
 
     run_dir = runtime.results_dir / _slug_timestamp(f"{experiment_name}_server_e2e")
@@ -495,6 +523,12 @@ def run_server_end_to_end_smoke(
         ),
         "cache_query_results": cache_query_results,
         "subprocess_batch_size": max(1, subprocess_batch_size),
+        "screening_output_policy": screening_output_policy,
+        "keep_screening_query_outputs": (
+            keep_screening_query_outputs
+            if keep_screening_query_outputs is not None
+            else screening_output_policy != "metrics_only"
+        ),
     }
     _write_json(summary_path, summary)
     return ServerEndToEndResult(
