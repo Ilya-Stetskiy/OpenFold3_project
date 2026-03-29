@@ -5,6 +5,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -28,6 +29,7 @@ class RunResult:
     summary_dir: Path
     log_path: Path
     samples_df: object
+    elapsed_seconds: float
     return_code: int
 
 
@@ -137,9 +139,11 @@ def run_prediction(
     if inference_ckpt_name:
         cmd.append(f"--inference_ckpt_name={inference_ckpt_name}")
 
+    started = time.perf_counter()
     return_code = run_cmd(cmd, env=env, log_path=log_path)
     if return_code != 0:
         raise subprocess.CalledProcessError(return_code, cmd)
+    elapsed_seconds = time.perf_counter() - started
 
     samples = collect_samples(output_dir)
     winners = best_samples_by_metric(samples)
@@ -176,5 +180,6 @@ def run_prediction(
         summary_dir=summary_dir,
         log_path=log_path,
         samples_df=samples_df,
+        elapsed_seconds=elapsed_seconds,
         return_code=return_code,
     )

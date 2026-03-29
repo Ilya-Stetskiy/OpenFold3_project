@@ -34,6 +34,7 @@ def test_report_and_artifact_copy_use_tmp_path(big_ace_output_dir: Path, tmp_pat
 class _FakeRunResult:
     experiment_name: str
     samples_df: pd.DataFrame
+    elapsed_seconds: float = 1.0
 
 
 def test_run_single_case_builds_payload_without_running_openfold(

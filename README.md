@@ -13,6 +13,7 @@ openfold_notebooks/
       config.py
       query_builders.py
       runner.py
+      screening.py
       workflows.py
   01_single_complex.ipynb
   02_mutation_batch.ipynb
@@ -22,6 +23,12 @@ What each notebook is for:
 
 - `01_single_complex.ipynb`: run one protein or complex prediction and inspect the best samples.
 - `02_mutation_batch.ipynb`: run a set of point mutations against one base complex and rank the results.
+
+Advanced batch modes on `main`:
+
+- notebook `predict` batch: one `run_openfold predict` call with multiple mutated queries
+- screening batch: `run_openfold screen-mutations` with cached per-mutation orchestration from the sibling `openfold-3` checkout
+- comparison wrapper: run both approaches and write a timing summary with speedup ratio
 
 Design goals:
 
@@ -51,6 +58,37 @@ Notebook UX:
 - both notebooks write `query.json`, `run_openfold.log`, raw outputs, and a `summary/` folder
 - the single-complex notebook shows a compact best-sample table and a quick interpretation
 - the mutation-batch notebook shows per-sample output, per-mutation summary, and final mutation ranking
+- advanced helper API also exposes `run_screened_mutation_case()`, `compare_mutation_batch_case()`, and `run_server_end_to_end_case()`
+
+## Advanced Screening API
+
+For the mutation-screening stage runner, `openfold_notebooks/main` now includes thin wrappers around the sibling `openfold-3` checkout.
+
+Default sibling checkout location:
+
+```text
+../openfold-3
+```
+
+Override if needed:
+
+```bash
+export OPENFOLD_REPO_DIR=/absolute/path/to/openfold-3
+```
+
+Notebook-facing entry points:
+
+- `run_screened_mutation_case(...)`
+- `compare_mutation_batch_case(...)`
+- `run_server_end_to_end_case(...)`
+
+What comparison mode writes:
+
+- wall-clock time for notebook `predict` batch
+- wall-clock time for `screen-mutations`
+- `time_saved_seconds`
+- `speedup_ratio`
+- internal `screen-mutations` totals from `results.jsonl`
 
 ## Test Pack
 
@@ -118,3 +156,18 @@ bash ./run_server_smoke.sh /tmp/openfold_smoke_output
 ```
 
 This smoke test is intentionally separate from the normal unit/integration test pack. It validates the actual OpenFold runtime on the server.
+
+## Server End-to-End Smoke
+
+For a broader server run that covers both single prediction and mutation screening:
+
+```bash
+bash ./run_server_end_to_end.sh
+```
+
+This command:
+
+- probes `nvidia-smi` if available
+- runs a minimal single-protein predict case
+- runs a minimal `screen-mutations` case on the same protein unless `--single-only` is passed
+- writes one JSON summary path at the end

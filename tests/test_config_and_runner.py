@@ -170,6 +170,7 @@ def test_run_prediction_full_mocked_flow(monkeypatch, tmp_path: Path) -> None:
 
     assert isinstance(result, RunResult)
     assert result.return_code == 0
+    assert result.elapsed_seconds >= 0.0
     assert result.query_path.exists()
     assert json.loads(result.query_path.read_text(encoding="utf-8")) == payload
     assert result.log_path.exists()

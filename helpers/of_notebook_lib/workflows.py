@@ -11,6 +11,14 @@ from .query_builders import (
     normalize_molecules,
 )
 from .runner import RunResult, run_prediction
+from .screening import (
+    BatchApproachComparison,
+    ScreeningBatchResult,
+    ServerEndToEndResult,
+    compare_mutation_batch_approaches,
+    run_screened_mutation_scan,
+    run_server_end_to_end_smoke,
+)
 
 
 def run_single_case(
@@ -94,3 +102,116 @@ def run_mutation_scan(
     mutation_summary = summarize_mutation_batch(result.samples_df)
     mutation_ranking = rank_mutations(mutation_summary, top_n=len(mutation_summary))
     return result, mutation_summary, mutation_ranking
+
+
+def run_screened_mutation_case(
+    runtime: RuntimeConfig,
+    experiment_name: str,
+    molecules: list[dict],
+    *,
+    mutation_chain_id: str,
+    position_1based: int,
+    amino_acids: str | list[str],
+    include_wt: bool = True,
+    use_templates: bool = True,
+    use_msa_server: bool = True,
+    num_diffusion_samples: int = 1,
+    num_model_seeds: int = 1,
+    runner_yaml: str | None = None,
+    inference_ckpt_path: str | None = None,
+    inference_ckpt_name: str | None = None,
+    repo_dir: str | None = None,
+) -> ScreeningBatchResult:
+    return run_screened_mutation_scan(
+        runtime=runtime,
+        experiment_name=experiment_name,
+        molecules=molecules,
+        mutation_chain_id=mutation_chain_id,
+        position_1based=position_1based,
+        amino_acids=amino_acids,
+        include_wt=include_wt,
+        use_templates=use_templates,
+        use_msa_server=use_msa_server,
+        num_diffusion_samples=num_diffusion_samples,
+        num_model_seeds=num_model_seeds,
+        runner_yaml=runner_yaml,
+        inference_ckpt_path=inference_ckpt_path,
+        inference_ckpt_name=inference_ckpt_name,
+        repo_dir=repo_dir,
+    )
+
+
+def compare_mutation_batch_case(
+    runtime: RuntimeConfig,
+    experiment_name: str,
+    molecules: list[dict],
+    *,
+    mutation_chain_id: str,
+    position_1based: int,
+    amino_acids: str | list[str],
+    include_wt: bool = True,
+    use_templates: bool = True,
+    use_msa_server: bool = True,
+    num_diffusion_samples: int = 1,
+    num_model_seeds: int = 1,
+    runner_yaml: str | None = None,
+    inference_ckpt_path: str | None = None,
+    inference_ckpt_name: str | None = None,
+    repo_dir: str | None = None,
+) -> BatchApproachComparison:
+    return compare_mutation_batch_approaches(
+        runtime=runtime,
+        experiment_name=experiment_name,
+        molecules=molecules,
+        mutation_chain_id=mutation_chain_id,
+        position_1based=position_1based,
+        amino_acids=amino_acids,
+        include_wt=include_wt,
+        use_templates=use_templates,
+        use_msa_server=use_msa_server,
+        num_diffusion_samples=num_diffusion_samples,
+        num_model_seeds=num_model_seeds,
+        runner_yaml=runner_yaml,
+        inference_ckpt_path=inference_ckpt_path,
+        inference_ckpt_name=inference_ckpt_name,
+        repo_dir=repo_dir,
+    )
+
+
+def run_server_end_to_end_case(
+    runtime: RuntimeConfig,
+    experiment_name: str,
+    molecules: list[dict],
+    *,
+    mutation_chain_id: str,
+    position_1based: int,
+    amino_acids: str | list[str],
+    include_wt: bool = True,
+    use_templates: bool = False,
+    use_msa_server: bool = True,
+    num_diffusion_samples: int = 1,
+    num_model_seeds: int = 1,
+    runner_yaml: str | None = None,
+    inference_ckpt_path: str | None = None,
+    inference_ckpt_name: str | None = None,
+    repo_dir: str | None = None,
+    run_screening: bool = True,
+) -> ServerEndToEndResult:
+    return run_server_end_to_end_smoke(
+        runtime=runtime,
+        experiment_name=experiment_name,
+        molecules=molecules,
+        mutation_chain_id=mutation_chain_id,
+        position_1based=position_1based,
+        amino_acids=amino_acids,
+        include_wt=include_wt,
+        use_templates=use_templates,
+        use_msa_server=use_msa_server,
+        num_diffusion_samples=num_diffusion_samples,
+        num_model_seeds=num_model_seeds,
+        runner_yaml=runner_yaml,
+        inference_ckpt_path=inference_ckpt_path,
+        inference_ckpt_name=inference_ckpt_name,
+        repo_dir=repo_dir,
+        run_screening=run_screening,
+    )

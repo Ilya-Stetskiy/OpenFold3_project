@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -12,6 +13,10 @@ def _path_from_env(name: str, default: str) -> Path:
 @dataclass(slots=True)
 class RuntimeConfig:
     project_dir: Path = _path_from_env("OPENFOLD_PROJECT_DIR", "/home/jovyan/OpenFold")
+    openfold_repo_dir: Path = _path_from_env(
+        "OPENFOLD_REPO_DIR",
+        str(Path(__file__).resolve().parents[3] / "openfold-3"),
+    )
     openfold_prefix: Path = _path_from_env(
         "OPENFOLD_PREFIX", "/home/jovyan/.mlspace/envs/openfold310"
     )
@@ -33,6 +38,13 @@ class RuntimeConfig:
     @property
     def openfold_runner(self) -> Path:
         return self.openfold_prefix / "bin" / "run_openfold"
+
+    @property
+    def openfold_python(self) -> Path:
+        candidate = self.openfold_prefix / "bin" / "python"
+        if candidate.exists():
+            return candidate
+        return Path(sys.executable)
 
     def build_env(self) -> dict[str, str]:
         env = os.environ.copy()
