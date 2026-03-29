@@ -347,6 +347,7 @@ class SubprocessOpenFoldBackend:
 
         output_settings = config.setdefault("output_writer_settings", {})
         output_settings["metrics_only"] = self.job.output_policy == "metrics_only"
+        output_settings["cif_only"] = self.job.output_policy == "cif_only"
         output_settings.setdefault("summary_filename", "summary.jsonl")
 
         data_module_args = config.setdefault("data_module_args", {})

@@ -136,7 +136,13 @@ class ExperimentRunner(ABC):
     @cached_property
     def lightning_module(self) -> pl.LightningModule:
         """Instantiate and return the model."""
-        return self.project_entry.runner(self.model_config, log_dir=self.log_dir)
+        module = self.project_entry.runner(self.model_config, log_dir=self.log_dir)
+        setattr(
+            module,
+            "skip_confidence_scores",
+            self.output_writer_settings.cif_only,
+        )
+        return module
 
     @cached_property
     def output_dir(self) -> Path:
@@ -624,6 +630,7 @@ class InferenceExperimentRunner(ExperimentRunner):
         completed_structures = []
         structure_format = self.output_writer_settings.structure_format
         metrics_only = self.output_writer_settings.metrics_only
+        cif_only = self.output_writer_settings.cif_only
 
         for query_id in inference_query_set.queries:
             # All expected outputs for every seed/sample must be present to count as
@@ -640,6 +647,8 @@ class InferenceExperimentRunner(ExperimentRunner):
                         completed_file = Path(
                             f"{file_prefix}_confidences_aggregated.json"
                         )
+                    elif cif_only:
+                        completed_file = Path(f"{file_prefix}_model.{structure_format}")
                     else:
                         completed_file = Path(f"{file_prefix}_model.{structure_format}")
                     query_completed = completed_file.exists() and query_completed

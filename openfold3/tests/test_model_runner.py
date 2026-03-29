@@ -131,3 +131,34 @@ def test_version_registration():
     # Check that the version property returns the expected version string
     expected_version = "1.0.0"
     assert model_runner.version == expected_version
+
+
+def test_predict_step_can_skip_confidence_scores():
+    project_entry = OF3ProjectEntry()
+    config = project_entry.get_model_config_with_presets()
+    model_runner = OpenFold3AllAtom(model_config=config)
+    model_runner.skip_confidence_scores = True
+
+    batch = {
+        "query_id": ["one"],
+        "seed": torch.tensor([123]),
+        "repeated_sample": torch.tensor([False]),
+        "valid_sample": torch.tensor([True]),
+    }
+
+    with (
+        patch.object(
+            model_runner.model,
+            "forward",
+            return_value=(
+                batch,
+                {"atom_positions_predicted": torch.randn(1, 1, 2, 3)},
+            ),
+        ),
+        patch.object(model_runner, "_compute_confidence_scores") as confidence_mock,
+    ):
+        returned_batch, outputs = model_runner.predict_step(batch, 0)
+
+    confidence_mock.assert_not_called()
+    assert returned_batch["query_id"] == ["one"]
+    assert outputs["confidence_scores"] is None

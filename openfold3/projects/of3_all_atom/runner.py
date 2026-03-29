@@ -90,6 +90,7 @@ class OpenFold3AllAtom(ModelRunner):
         super().__init__(model_class=OpenFold3, config=model_config)
 
         self.log_dir = log_dir
+        self.skip_confidence_scores = False
 
         self.loss = OpenFold3Loss(config=model_config.architecture.loss_module)
 
@@ -976,11 +977,15 @@ class OpenFold3AllAtom(ModelRunner):
             batch, outputs = self(batch)
             forward_seconds = time.perf_counter() - forward_started
 
-            # Generate confidence scores
-            confidence_started = time.perf_counter()
-            confidence_scores = self._compute_confidence_scores(batch, outputs)
-            confidence_seconds = time.perf_counter() - confidence_started
-            outputs["confidence_scores"] = confidence_scores
+            # Generate confidence scores unless the run only needs structures.
+            confidence_seconds = 0.0
+            if self.skip_confidence_scores:
+                outputs["confidence_scores"] = None
+            else:
+                confidence_started = time.perf_counter()
+                confidence_scores = self._compute_confidence_scores(batch, outputs)
+                confidence_seconds = time.perf_counter() - confidence_started
+                outputs["confidence_scores"] = confidence_scores
             logger.info(
                 "Predict timings for query_id(s) %s: batch_size=%s forward=%.2fs "
                 "confidence=%.2fs",

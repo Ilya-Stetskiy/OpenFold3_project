@@ -169,7 +169,17 @@ class OutputWritingSettings(BaseModel):
     write_features: bool = False
     write_latent_outputs: bool = False
     metrics_only: bool = False
+    cif_only: bool = False
     summary_filename: str = "summary.jsonl"
+
+    @model_validator(mode="after")
+    def validate_output_modes(self):
+        if self.metrics_only and self.cif_only:
+            raise ValueError(
+                "output_writer_settings.metrics_only and output_writer_settings.cif_only "
+                "cannot both be true."
+            )
+        return self
 
 
 class ExperimentSettings(BaseModel):

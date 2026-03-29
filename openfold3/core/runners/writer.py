@@ -91,6 +91,7 @@ class OF3OutputWriter(BasePredictionWriter):
         write_features: bool = False,
         write_latent_outputs: bool = False,
         metrics_only: bool = False,
+        cif_only: bool = False,
         summary_filename: str = "summary.jsonl",
     ):
         super().__init__(write_interval="batch")
@@ -101,6 +102,7 @@ class OF3OutputWriter(BasePredictionWriter):
         self.write_features = write_features
         self.write_latent_outputs = write_latent_outputs
         self.metrics_only = metrics_only
+        self.cif_only = cif_only
         self.summary_path = self.output_dir / summary_filename
 
         # Track successfully predicted samples
@@ -262,15 +264,24 @@ class OF3OutputWriter(BasePredictionWriter):
             predicted_coords_batch = (
                 outputs["atom_positions_predicted"][b].cpu().float().numpy()
             )
-            confidence_scores_batch = _take_batch_dim(confidence_scores, b)
+            confidence_scores_batch = (
+                None if self.cif_only else _take_batch_dim(confidence_scores, b)
+            )
 
             # Iterate over all diffusion samples
             for s in range(sample_size):
                 file_prefix = output_subdir / f"{query_id}_seed_{seed}_sample_{s + 1}"
                 file_prefix.parent.mkdir(parents=True, exist_ok=True)
 
-                confidence_scores_sample = _take_sample_dim(confidence_scores_batch, s)
                 predicted_coords_sample = predicted_coords_batch[s]
+                if self.cif_only:
+                    confidence_scores_sample = None
+                    plddt_values = np.zeros(len(atom_array_batch), dtype=np.float32)
+                else:
+                    confidence_scores_sample = _take_sample_dim(
+                        confidence_scores_batch, s
+                    )
+                    plddt_values = confidence_scores_sample["plddt"]
 
                 structure_file = Path(f"{file_prefix}_model.{self.structure_format}")
                 if not self.metrics_only:
@@ -278,25 +289,28 @@ class OF3OutputWriter(BasePredictionWriter):
                     self.write_structure_prediction(
                         atom_array=atom_array_batch,
                         predicted_coords=predicted_coords_sample,
-                        plddt=confidence_scores_sample["plddt"],
+                        plddt=plddt_values,
                         output_file=structure_file,
                     )
 
-                # Save confidence metrics
-                aggregated_scores = self.write_confidence_scores(
-                    confidence_scores=confidence_scores_sample,
-                    output_prefix=file_prefix,
-                    atom_array=atom_array_batch,
-                )
+                aggregated_scores: dict[str, Any] = {}
+                aggregated_confidence_path: str | None = None
+                if not self.cif_only:
+                    aggregated_scores = self.write_confidence_scores(
+                        confidence_scores=confidence_scores_sample,
+                        output_prefix=file_prefix,
+                        atom_array=atom_array_batch,
+                    )
+                    aggregated_confidence_path = str(
+                        Path(f"{file_prefix}_confidences_aggregated.json")
+                    )
                 self.append_summary_row(
                     {
                         "query_id": query_id,
                         "mutation_id": query_id,
                         "seed": int(seed),
                         "sample_index": s + 1,
-                        "aggregated_confidence_path": str(
-                            Path(f"{file_prefix}_confidences_aggregated.json")
-                        ),
+                        "aggregated_confidence_path": aggregated_confidence_path,
                         "derived_interface_metrics": {},
                         **aggregated_scores,
                     }
@@ -357,7 +371,7 @@ class OF3OutputWriter(BasePredictionWriter):
             return
 
         batch, outputs = outputs
-        confidence_scores = outputs["confidence_scores"]
+        confidence_scores = outputs.get("confidence_scores")
 
         # Write predictions and confidence scores
         # Optionally write out input features and latent outputs

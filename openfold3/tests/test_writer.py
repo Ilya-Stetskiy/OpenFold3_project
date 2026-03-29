@@ -297,3 +297,52 @@ class TestPredictionWriter:
         assert summary["query_id"] == "mut_A_A10G"
         assert summary["mutation_id"] == "mut_A_A10G"
         assert summary["sample_index"] == 1
+
+    def test_cif_only_writer_skips_confidence_outputs(self, tmp_path):
+        atom_array = structure.array(
+            [
+                structure.Atom([1.0, 2.0, 3.0], chain_id="A"),
+                structure.Atom([2.0, 3.0, 4.0], chain_id="A"),
+            ]
+        )
+        atom_array.entity_id = np.array(["A", "A"])
+        atom_array.molecule_type_id = np.array(["0", "0"])
+        atom_array.pdbx_formal_charge = np.array(["0", "0"])
+
+        writer = OF3OutputWriter(
+            output_dir=tmp_path,
+            pae_enabled=True,
+            structure_format="cif",
+            full_confidence_output_format="json",
+            cif_only=True,
+            summary_filename="summary.jsonl",
+        )
+
+        batch = {
+            "atom_array": [atom_array],
+            "seed": [42],
+            "query_id": ["mut_A_A10G"],
+        }
+        outputs = {
+            "atom_positions_predicted": torch.tensor(
+                [[[[1.0, 2.0, 3.0], [2.0, 3.0, 4.0]]]], dtype=torch.float32
+            )
+        }
+
+        writer.write_all_outputs(batch, outputs, confidence_scores=None)
+
+        prefix = (
+            tmp_path
+            / "mut_A_A10G"
+            / "seed_42"
+            / "mut_A_A10G_seed_42_sample_1"
+        )
+        assert Path(f"{prefix}_model.cif").exists()
+        assert not Path(f"{prefix}_confidences.json").exists()
+        assert not Path(f"{prefix}_confidences_aggregated.json").exists()
+
+        summary_rows = (tmp_path / "summary.jsonl").read_text().splitlines()
+        assert len(summary_rows) == 1
+        summary = json.loads(summary_rows[0])
+        assert summary["query_id"] == "mut_A_A10G"
+        assert summary["aggregated_confidence_path"] is None
