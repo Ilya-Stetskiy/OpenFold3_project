@@ -338,6 +338,24 @@ class SubprocessOpenFoldBackend:
         if output_dir.exists():
             shutil.rmtree(output_dir, ignore_errors=True)
 
+    @staticmethod
+    def _summarize_query_ids(
+        prepared_jobs: list[PreparedMutationJob], max_items: int = 4
+    ) -> str:
+        query_ids = [prepared_job.query_id for prepared_job in prepared_jobs]
+        if len(query_ids) <= max_items:
+            return ", ".join(query_ids)
+        head = ", ".join(query_ids[:max_items])
+        return f"{head}, ... ({len(query_ids)} total)"
+
+    @staticmethod
+    def _log_label_for_batch(
+        prepared_jobs: list[PreparedMutationJob], output_dir: Path
+    ) -> str:
+        if len(prepared_jobs) == 1:
+            return prepared_jobs[0].query_id
+        return f"{output_dir.name}|{len(prepared_jobs)}q"
+
     def _runner_yaml_for_output_dir(self, output_dir: Path) -> Path:
         config = {}
         if self.job.runner_yaml is not None:
@@ -407,8 +425,13 @@ class SubprocessOpenFoldBackend:
             bufsize=1,
         )
         assert process.stdout is not None
+        previous_line = None
         for line in process.stdout:
-            logger.info("[predict:%s] %s", log_label, line.rstrip())
+            stripped = line.strip()
+            if not stripped or stripped == previous_line:
+                continue
+            previous_line = stripped
+            logger.info("[predict:%s] %s", log_label, stripped)
         return_code = process.wait()
         if return_code != 0:
             raise subprocess.CalledProcessError(return_code, cmd)
@@ -513,7 +536,7 @@ class SubprocessOpenFoldBackend:
         if len(prepared_jobs) == 1:
             output_dir = prepared_jobs[0].output_dir
             payload_path = prepared_jobs[0].payload_path
-            log_label = prepared_jobs[0].query_id
+            log_label = self._log_label_for_batch(prepared_jobs, output_dir)
             query_output_dirs = {
                 prepared_jobs[0].query_id: prepared_jobs[0].output_dir,
             }
@@ -525,9 +548,7 @@ class SubprocessOpenFoldBackend:
                 / f"batch_{self._batch_counter:04d}"
             )
             payload_path = self._write_batch_payload(prepared_jobs, output_dir)
-            log_label = ",".join(
-                prepared_job.query_id for prepared_job in prepared_jobs
-            )
+            log_label = self._log_label_for_batch(prepared_jobs, output_dir)
             query_output_dirs = {
                 prepared_job.query_id: output_dir / prepared_job.query_id
                 for prepared_job in prepared_jobs
@@ -536,9 +557,10 @@ class SubprocessOpenFoldBackend:
         runner_yaml = self._runner_yaml_for_output_dir(output_dir)
         cmd = self._build_predict_cmd(payload_path, output_dir, runner_yaml)
         logger.info(
-            "Launching %s query(s): %s",
+            "Launching %s query(s) via %s: %s",
             len(prepared_jobs),
-            ", ".join(prepared_job.query_id for prepared_job in prepared_jobs),
+            log_label,
+            self._summarize_query_ids(prepared_jobs),
         )
         batch_gpu_seconds = self._run_predict(cmd, log_label)
         gpu_seconds_per_query = batch_gpu_seconds / len(prepared_jobs)
