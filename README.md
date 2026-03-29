@@ -59,6 +59,7 @@ Notebook UX:
 - the single-complex notebook shows a compact best-sample table and a quick interpretation
 - the mutation-batch notebook shows per-sample output, per-mutation summary, and final mutation ranking
 - advanced helper API also exposes `run_screened_mutation_case()`, `compare_mutation_batch_case()`, and `run_server_end_to_end_case()`
+- a local low-memory runner config is available at `./configs/low_mem.yml`
 
 ## Advanced Screening API
 
