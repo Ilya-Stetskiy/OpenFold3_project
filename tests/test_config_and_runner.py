@@ -117,7 +117,7 @@ def test_run_cmd_writes_log(monkeypatch, tmp_path: Path) -> None:
 
     monkeypatch.setattr("of_notebook_lib.runner.subprocess.Popen", lambda *args, **kwargs: FakeProcess())
 
-    return_code = run_cmd(["cmd"], env={"X": "1"}, log_path=log_path)
+    return_code = run_cmd(["cmd"], env={"X": "1"}, log_path=log_path, cwd=tmp_path)
 
     assert return_code == 0
     assert "line one" in log_path.read_text(encoding="utf-8")
@@ -155,9 +155,10 @@ def test_run_prediction_full_mocked_flow(monkeypatch, tmp_path: Path) -> None:
     def fake_ensure(runtime_arg):
         captured["ensure_called"] = runtime_arg.fixed_msa_tmp_dir
 
-    def fake_run_cmd(cmd, env, log_path):
+    def fake_run_cmd(cmd, env, log_path, *, cwd=None):
         captured["cmd"] = cmd
         captured["env"] = env
+        captured["cwd"] = cwd
         log_path.write_text("fake log\n", encoding="utf-8")
         return 0
 
@@ -193,6 +194,7 @@ def test_run_prediction_full_mocked_flow(monkeypatch, tmp_path: Path) -> None:
     assert result.log_path.exists()
     assert result.summary_dir.exists()
     assert (result.summary_dir / "run_params.json").exists()
+    assert captured["cwd"] == runtime.project_dir.resolve()
     assert "--use_templates=false" in captured["cmd"]
     assert "--use_msa_server=false" in captured["cmd"]
     assert any(str(item).startswith("--runner_yaml=") for item in captured["cmd"])
@@ -214,7 +216,7 @@ def test_run_prediction_raises_on_nonzero_return_code(monkeypatch, tmp_path: Pat
     monkeypatch.setattr("of_notebook_lib.runner.ensure_msa_cache_link", lambda runtime_arg: None)
     monkeypatch.setattr(
         "of_notebook_lib.runner.run_cmd",
-        lambda cmd, env, log_path: 17,
+        lambda cmd, env, log_path, *, cwd=None: 17,
     )
 
     try:

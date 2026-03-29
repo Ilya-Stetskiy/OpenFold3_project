@@ -94,10 +94,11 @@ def ensure_msa_cache_link(runtime: RuntimeConfig) -> None:
     os.symlink(source, target, target_is_directory=True)
 
 
-def run_cmd(cmd: list[str], env: dict[str, str], log_path: Path) -> int:
+def run_cmd(cmd: list[str], env: dict[str, str], log_path: Path, *, cwd: Path | None = None) -> int:
     with log_path.open("w", encoding="utf-8") as handle:
         process = subprocess.Popen(
             cmd,
+            cwd=cwd,
             env=env,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
@@ -159,7 +160,12 @@ def run_prediction(
         cmd.append(f"--inference_ckpt_name={inference_ckpt_name}")
 
     started = time.perf_counter()
-    return_code = run_cmd(cmd, env=env, log_path=log_path)
+    return_code = run_cmd(
+        cmd,
+        env=env,
+        log_path=log_path,
+        cwd=runtime.project_dir.resolve(),
+    )
     if return_code != 0:
         raise subprocess.CalledProcessError(return_code, cmd)
     elapsed_seconds = time.perf_counter() - started
