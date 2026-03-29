@@ -88,6 +88,23 @@ def test_ensure_msa_cache_link_rejects_non_temp_directory(monkeypatch, tmp_path:
         raise AssertionError("Expected RuntimeError for unsafe MSA link replacement")
 
 
+def test_ensure_msa_cache_link_directory_mode_uses_plain_directory(tmp_path: Path) -> None:
+    source = tmp_path / "msa_cache"
+    source.mkdir()
+    target = tmp_path / "tmp" / "msa_link"
+
+    runtime = RuntimeConfig(
+        msa_cache_dir=source,
+        fixed_msa_tmp_dir=target,
+        msa_tmp_mode="directory",
+    )
+    ensure_msa_cache_link(runtime)
+
+    assert target.exists()
+    assert target.is_dir()
+    assert not target.is_symlink()
+
+
 def test_run_cmd_writes_log(monkeypatch, tmp_path: Path) -> None:
     log_path = tmp_path / "run.log"
 

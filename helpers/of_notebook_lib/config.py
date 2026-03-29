@@ -32,6 +32,7 @@ class RuntimeConfig:
     fixed_msa_tmp_dir: Path = _path_from_env(
         "OPENFOLD_FIXED_MSA_TMP_DIR", "/tmp/of3_colabfold_msas"
     )
+    msa_tmp_mode: str = os.environ.get("OPENFOLD_MSA_TMP_MODE", "symlink")
     use_fused_attention: bool = False
     use_deepspeed: bool = False
 
@@ -47,6 +48,7 @@ class RuntimeConfig:
         return Path(sys.executable)
 
     def build_env(self) -> dict[str, str]:
+        self.triton_cache_dir.mkdir(parents=True, exist_ok=True)
         env = os.environ.copy()
         env["CUDA_HOME"] = str(self.openfold_prefix)
         env["PATH"] = f"{self.openfold_prefix / 'bin'}:{env.get('PATH', '')}"

@@ -58,6 +58,25 @@ def ensure_msa_cache_link(runtime: RuntimeConfig) -> None:
     target = runtime.fixed_msa_tmp_dir
     source = runtime.msa_cache_dir
     target.parent.mkdir(parents=True, exist_ok=True)
+    mode = runtime.msa_tmp_mode.lower()
+
+    if mode == "directory":
+        if target.exists() or target.is_symlink():
+            if target.is_symlink() or target.is_file():
+                target.unlink()
+            elif target.is_dir() and not _is_safe_temp_target(target):
+                raise RuntimeError(
+                    f"Refusing to replace non-temporary directory at {target}. "
+                    "Set OPENFOLD_FIXED_MSA_TMP_DIR to a disposable temp path."
+                )
+        target.mkdir(parents=True, exist_ok=True)
+        return
+
+    if mode != "symlink":
+        raise ValueError(
+            f"Unsupported OPENFOLD_MSA_TMP_MODE='{runtime.msa_tmp_mode}'. "
+            "Expected 'symlink' or 'directory'."
+        )
 
     if target.exists() or target.is_symlink():
         if target.is_symlink() and Path(os.readlink(target)) == source:
