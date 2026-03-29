@@ -32,6 +32,8 @@ def main() -> None:
     parser.add_argument("--inference-ckpt-name", type=str, default=None)
     parser.add_argument("--repo-dir", type=str, default=None)
     parser.add_argument("--subprocess-batch-size", type=int, default=1)
+    parser.add_argument("--dispatch-partial-batches", action="store_true")
+    parser.add_argument("--batch-gather-timeout-seconds", type=float, default=None)
     parser.add_argument("--use-templates", action="store_true")
     parser.add_argument("--no-msa-server", action="store_true")
     parser.add_argument("--no-query-result-cache", action="store_true")
@@ -62,6 +64,8 @@ def main() -> None:
         run_screening=not args.single_only,
         cache_query_results=not args.no_query_result_cache,
         subprocess_batch_size=args.subprocess_batch_size,
+        dispatch_partial_batches=args.dispatch_partial_batches,
+        batch_gather_timeout_seconds=args.batch_gather_timeout_seconds,
     )
     print(f"summary_path={result.summary_path}")
 

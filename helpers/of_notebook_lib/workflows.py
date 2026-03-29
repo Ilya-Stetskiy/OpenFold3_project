@@ -123,6 +123,8 @@ def run_screened_mutation_case(
     repo_dir: str | None = None,
     cache_query_results: bool = True,
     subprocess_batch_size: int = 1,
+    dispatch_partial_batches: bool = False,
+    batch_gather_timeout_seconds: float | None = None,
     output_policy: str = "metrics_only",
     keep_query_outputs: bool | None = None,
 ) -> ScreeningBatchResult:
@@ -144,6 +146,8 @@ def run_screened_mutation_case(
         repo_dir=repo_dir,
         cache_query_results=cache_query_results,
         subprocess_batch_size=subprocess_batch_size,
+        dispatch_partial_batches=dispatch_partial_batches,
+        batch_gather_timeout_seconds=batch_gather_timeout_seconds,
         output_policy=output_policy,
         keep_query_outputs=keep_query_outputs,
     )
@@ -168,6 +172,8 @@ def compare_mutation_batch_case(
     repo_dir: str | None = None,
     cache_query_results: bool = True,
     subprocess_batch_size: int = 1,
+    dispatch_partial_batches: bool = False,
+    batch_gather_timeout_seconds: float | None = None,
     screening_output_policy: str = "metrics_only",
     keep_screening_query_outputs: bool | None = None,
 ) -> BatchApproachComparison:
@@ -189,6 +195,8 @@ def compare_mutation_batch_case(
         repo_dir=repo_dir,
         cache_query_results=cache_query_results,
         subprocess_batch_size=subprocess_batch_size,
+        dispatch_partial_batches=dispatch_partial_batches,
+        batch_gather_timeout_seconds=batch_gather_timeout_seconds,
         screening_output_policy=screening_output_policy,
         keep_screening_query_outputs=keep_screening_query_outputs,
     )
@@ -214,6 +222,8 @@ def run_server_end_to_end_case(
     run_screening: bool = True,
     cache_query_results: bool = True,
     subprocess_batch_size: int = 1,
+    dispatch_partial_batches: bool = False,
+    batch_gather_timeout_seconds: float | None = None,
     screening_output_policy: str = "metrics_only",
     keep_screening_query_outputs: bool | None = None,
 ) -> ServerEndToEndResult:
@@ -236,6 +246,8 @@ def run_server_end_to_end_case(
         run_screening=run_screening,
         cache_query_results=cache_query_results,
         subprocess_batch_size=subprocess_batch_size,
+        dispatch_partial_batches=dispatch_partial_batches,
+        batch_gather_timeout_seconds=batch_gather_timeout_seconds,
         screening_output_policy=screening_output_policy,
         keep_screening_query_outputs=keep_screening_query_outputs,
     )

@@ -196,6 +196,8 @@ def run_screened_mutation_scan(
     max_inflight_queries: int = 1,
     cache_query_results: bool = True,
     subprocess_batch_size: int = 1,
+    dispatch_partial_batches: bool = False,
+    batch_gather_timeout_seconds: float | None = None,
 ) -> ScreeningBatchResult:
     repo_root = _resolve_openfold_repo_dir(runtime, repo_dir)
     run_dir = runtime.results_dir / _slug_timestamp(f"{experiment_name}_screening")
@@ -240,6 +242,7 @@ def run_screened_mutation_scan(
         "num_cpu_workers": num_cpu_workers,
         "max_inflight_queries": max_inflight_queries,
         "subprocess_batch_size": max(1, subprocess_batch_size),
+        "dispatch_partial_batches": dispatch_partial_batches,
         "num_diffusion_samples": num_diffusion_samples,
         "num_model_seeds": num_model_seeds,
         "runner_yaml": str(resolved_runner_yaml) if resolved_runner_yaml else None,
@@ -253,6 +256,8 @@ def run_screened_mutation_scan(
         "cleanup_query_outputs": not keep_query_outputs,
         "log_file": str(run_dir / "screening_runtime.log"),
     }
+    if batch_gather_timeout_seconds is not None:
+        job["batch_gather_timeout_seconds"] = float(batch_gather_timeout_seconds)
     _write_json(job_json_path, job)
 
     cmd = [
@@ -294,6 +299,8 @@ def run_screened_mutation_scan(
         "elapsed_seconds": elapsed_seconds,
         "cache_query_results": cache_query_results,
         "subprocess_batch_size": max(1, subprocess_batch_size),
+        "dispatch_partial_batches": dispatch_partial_batches,
+        "batch_gather_timeout_seconds": batch_gather_timeout_seconds,
         "output_policy": output_policy,
         "keep_query_outputs": keep_query_outputs,
         "row_count": int(len(rows_df)),
@@ -341,6 +348,8 @@ def compare_mutation_batch_approaches(
     repo_dir: str | Path | None = None,
     cache_query_results: bool = True,
     subprocess_batch_size: int = 1,
+    dispatch_partial_batches: bool = False,
+    batch_gather_timeout_seconds: float | None = None,
     screening_output_policy: str = "metrics_only",
     keep_screening_query_outputs: bool | None = None,
 ) -> BatchApproachComparison:
@@ -382,6 +391,8 @@ def compare_mutation_batch_approaches(
         repo_dir=repo_dir,
         cache_query_results=cache_query_results,
         subprocess_batch_size=subprocess_batch_size,
+        dispatch_partial_batches=dispatch_partial_batches,
+        batch_gather_timeout_seconds=batch_gather_timeout_seconds,
         output_policy=screening_output_policy,
         keep_query_outputs=keep_screening_query_outputs,
     )
@@ -402,6 +413,8 @@ def compare_mutation_batch_approaches(
         "screen_mutations_internal_total_seconds": screening_internal_total,
         "cache_query_results": cache_query_results,
         "subprocess_batch_size": max(1, subprocess_batch_size),
+        "dispatch_partial_batches": dispatch_partial_batches,
+        "batch_gather_timeout_seconds": batch_gather_timeout_seconds,
         "screening_output_policy": screening_output_policy,
         "keep_screening_query_outputs": (
             keep_screening_query_outputs
@@ -465,6 +478,8 @@ def run_server_end_to_end_smoke(
     run_screening: bool = True,
     cache_query_results: bool = True,
     subprocess_batch_size: int = 1,
+    dispatch_partial_batches: bool = False,
+    batch_gather_timeout_seconds: float | None = None,
     screening_output_policy: str = "metrics_only",
     keep_screening_query_outputs: bool | None = None,
 ) -> ServerEndToEndResult:
@@ -502,6 +517,8 @@ def run_server_end_to_end_smoke(
             repo_dir=repo_dir,
             cache_query_results=cache_query_results,
             subprocess_batch_size=subprocess_batch_size,
+            dispatch_partial_batches=dispatch_partial_batches,
+            batch_gather_timeout_seconds=batch_gather_timeout_seconds,
             output_policy=screening_output_policy,
             keep_query_outputs=keep_screening_query_outputs,
         )
@@ -523,6 +540,8 @@ def run_server_end_to_end_smoke(
         ),
         "cache_query_results": cache_query_results,
         "subprocess_batch_size": max(1, subprocess_batch_size),
+        "dispatch_partial_batches": dispatch_partial_batches,
+        "batch_gather_timeout_seconds": batch_gather_timeout_seconds,
         "screening_output_policy": screening_output_policy,
         "keep_screening_query_outputs": (
             keep_screening_query_outputs
