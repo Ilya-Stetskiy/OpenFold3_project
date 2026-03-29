@@ -1,0 +1,8 @@
+# Faster exact-ish inference profile for large screening jobs on H100-class GPUs.
+# Intentionally omits the `low_mem` preset to avoid extra offloading and cache clears.
+model_update:
+  presets:
+    - predict
+
+data_module_args:
+  batch_size: 2
