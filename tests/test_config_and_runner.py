@@ -15,28 +15,74 @@ def test_path_from_env_uses_default_when_missing(monkeypatch) -> None:
     assert _path_from_env("OPENFOLD_TEST_PATH", "~/demo").name == "demo"
 
 
+def test_runtime_config_defaults_follow_current_project_dir(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.chdir(tmp_path)
+    for env_name in (
+        "OPENFOLD_PROJECT_DIR",
+        "OPENFOLD_REPO_DIR",
+        "OPENFOLD_PREFIX",
+        "OPENFOLD_RESULTS_DIR",
+        "OPENFOLD_MSA_CACHE_DIR",
+        "OPENFOLD_TRITON_CACHE_DIR",
+        "OPENFOLD_FIXED_MSA_TMP_DIR",
+    ):
+        monkeypatch.delenv(env_name, raising=False)
+
+    runtime = RuntimeConfig()
+
+    assert runtime.project_dir == tmp_path.resolve()
+    assert runtime.openfold_repo_dir == (tmp_path / "openfold-3").resolve()
+    assert runtime.openfold_prefix == (tmp_path / ".venv").resolve()
+    assert runtime.results_dir == (tmp_path / "results").resolve()
+    assert runtime.msa_cache_dir == (
+        tmp_path / "msa_cache" / "colabfold_msas"
+    ).resolve()
+    assert runtime.triton_cache_dir == (tmp_path / ".runtime" / "triton_cache").resolve()
+    assert runtime.fixed_msa_tmp_dir == (
+        tmp_path / ".runtime" / "of3_colabfold_msas"
+    ).resolve()
+
+
 def test_runtime_config_build_env_sets_expected_keys(monkeypatch) -> None:
     monkeypatch.setenv("PATH", "base_path")
     monkeypatch.setenv("LD_LIBRARY_PATH", "base_ld")
+    prefix = Path("/tmp/openfold_prefix_test")
+    (prefix / "bin").mkdir(parents=True, exist_ok=True)
+    (prefix / "lib").mkdir(parents=True, exist_ok=True)
+    (prefix / "lib64").mkdir(parents=True, exist_ok=True)
 
     runtime = RuntimeConfig(
-        openfold_prefix=Path("/opt/openfold"),
+        openfold_prefix=prefix,
         triton_cache_dir=Path("/tmp/triton"),
         use_fused_attention=True,
         use_deepspeed=True,
     )
     env = runtime.build_env()
 
-    assert runtime.openfold_runner == Path("/opt/openfold/bin/run_openfold")
-    assert Path(env["CUDA_HOME"]) == Path("/opt/openfold")
-    assert env["PATH"].startswith(f"{Path('/opt/openfold/bin')}:")
+    assert runtime.openfold_runner == prefix / "bin" / "run_openfold"
+    assert Path(env["CUDA_HOME"]) == prefix
+    assert env["PATH"].startswith(f"{prefix / 'bin'}:")
     assert env["LD_LIBRARY_PATH"].startswith(
-        f"{Path('/opt/openfold/lib')}:{Path('/opt/openfold/lib64')}:"
+        f"{prefix / 'lib'}:{prefix / 'lib64'}:"
     )
     assert Path(env["TRITON_CACHE_DIR"]) == Path("/tmp/triton")
     assert env["PYTHONUNBUFFERED"] == "1"
     assert env["OPENFOLD_USE_FUSED_ATTENTION"] == "1"
     assert env["OPENFOLD_USE_DEEPSPEED"] == "1"
+
+
+def test_runtime_config_openfold_runner_falls_back_to_active_env(monkeypatch, tmp_path: Path) -> None:
+    active_python = tmp_path / "env" / "bin" / "python"
+    active_runner = tmp_path / "env" / "bin" / "run_openfold"
+    active_python.parent.mkdir(parents=True)
+    active_python.write_text("#!/usr/bin/env python\n", encoding="utf-8")
+    active_runner.write_text("#!/usr/bin/env bash\n", encoding="utf-8")
+
+    monkeypatch.setattr("of_notebook_lib.config.sys.executable", str(active_python))
+
+    runtime = RuntimeConfig(openfold_prefix=tmp_path / "missing-prefix")
+
+    assert runtime.openfold_runner == active_runner.resolve()
 
 
 def test_slug_timestamp_sanitizes_name() -> None:
