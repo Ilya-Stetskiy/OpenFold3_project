@@ -38,7 +38,11 @@ def _slug_timestamp(name: str) -> str:
     return f"{safe}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
 
-def _is_safe_temp_target(path: Path) -> bool:
+def _is_safe_temp_target(
+    path: Path,
+    *,
+    extra_roots: tuple[Path, ...] = (),
+) -> bool:
     try:
         resolved = path.resolve(strict=False)
     except OSError:
@@ -46,6 +50,11 @@ def _is_safe_temp_target(path: Path) -> bool:
 
     temp_roots = {Path(tempfile.gettempdir()).resolve(strict=False)}
     for candidate in (Path("/tmp"), Path("/var/tmp")):
+        try:
+            temp_roots.add(candidate.resolve(strict=False))
+        except OSError:
+            continue
+    for candidate in extra_roots:
         try:
             temp_roots.add(candidate.resolve(strict=False))
         except OSError:
@@ -59,12 +68,16 @@ def ensure_msa_cache_link(runtime: RuntimeConfig) -> None:
     source = runtime.msa_cache_dir
     target.parent.mkdir(parents=True, exist_ok=True)
     mode = runtime.msa_tmp_mode.lower()
+    disposable_roots = (runtime.project_dir / ".runtime",)
 
     if mode == "directory":
         if target.exists() or target.is_symlink():
             if target.is_symlink() or target.is_file():
                 target.unlink()
-            elif target.is_dir() and not _is_safe_temp_target(target):
+            elif target.is_dir() and not _is_safe_temp_target(
+                target,
+                extra_roots=disposable_roots,
+            ):
                 raise RuntimeError(
                     f"Refusing to replace non-temporary directory at {target}. "
                     "Set OPENFOLD_FIXED_MSA_TMP_DIR to a disposable temp path."
@@ -82,7 +95,7 @@ def ensure_msa_cache_link(runtime: RuntimeConfig) -> None:
         if target.is_symlink() and Path(os.readlink(target)) == source:
             return
         if target.is_dir() and not target.is_symlink():
-            if not _is_safe_temp_target(target):
+            if not _is_safe_temp_target(target, extra_roots=disposable_roots):
                 raise RuntimeError(
                     f"Refusing to replace non-temporary directory at {target}. "
                     "Set OPENFOLD_FIXED_MSA_TMP_DIR to a disposable temp path."

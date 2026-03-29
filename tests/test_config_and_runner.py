@@ -124,7 +124,10 @@ def test_ensure_msa_cache_link_rejects_non_temp_directory(monkeypatch, tmp_path:
     target.mkdir(parents=True)
 
     runtime = RuntimeConfig(msa_cache_dir=source, fixed_msa_tmp_dir=target)
-    monkeypatch.setattr("of_notebook_lib.runner._is_safe_temp_target", lambda path: False)
+    monkeypatch.setattr(
+        "of_notebook_lib.runner._is_safe_temp_target",
+        lambda path, *, extra_roots=(): False,
+    )
 
     try:
         ensure_msa_cache_link(runtime)
@@ -140,6 +143,29 @@ def test_ensure_msa_cache_link_directory_mode_uses_plain_directory(tmp_path: Pat
     target = tmp_path / "tmp" / "msa_link"
 
     runtime = RuntimeConfig(
+        msa_cache_dir=source,
+        fixed_msa_tmp_dir=target,
+        msa_tmp_mode="directory",
+    )
+    ensure_msa_cache_link(runtime)
+
+    assert target.exists()
+    assert target.is_dir()
+    assert not target.is_symlink()
+
+
+def test_ensure_msa_cache_link_directory_mode_allows_project_runtime_root(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "msa_cache"
+    source.mkdir()
+    project_dir = tmp_path / "project"
+    target = project_dir / ".runtime" / "of3_colabfold_msas"
+    target.mkdir(parents=True)
+    (target / "stale.txt").write_text("stale", encoding="utf-8")
+
+    runtime = RuntimeConfig(
+        project_dir=project_dir,
         msa_cache_dir=source,
         fixed_msa_tmp_dir=target,
         msa_tmp_mode="directory",
