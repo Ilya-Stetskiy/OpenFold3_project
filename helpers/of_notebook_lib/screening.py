@@ -192,6 +192,8 @@ def run_screened_mutation_scan(
     keep_query_outputs: bool = False,
     num_cpu_workers: int = 1,
     max_inflight_queries: int = 1,
+    cache_query_results: bool = True,
+    subprocess_batch_size: int = 1,
 ) -> ScreeningBatchResult:
     repo_root = _resolve_openfold_repo_dir(runtime, repo_dir)
     run_dir = runtime.results_dir / _slug_timestamp(f"{experiment_name}_screening")
@@ -221,8 +223,10 @@ def run_screened_mutation_scan(
         "template_policy": "reuse_precomputed",
         "output_policy": "metrics_only",
         "resume": True,
+        "cache_query_results": cache_query_results,
         "num_cpu_workers": num_cpu_workers,
         "max_inflight_queries": max_inflight_queries,
+        "subprocess_batch_size": max(1, subprocess_batch_size),
         "num_diffusion_samples": num_diffusion_samples,
         "num_model_seeds": num_model_seeds,
         "runner_yaml": str(Path(runner_yaml)) if runner_yaml else None,
@@ -275,8 +279,15 @@ def run_screened_mutation_scan(
         "log_path": str(log_path),
         "return_code": return_code,
         "elapsed_seconds": elapsed_seconds,
+        "cache_query_results": cache_query_results,
+        "subprocess_batch_size": max(1, subprocess_batch_size),
         "row_count": int(len(rows_df)),
         "mutation_summary_count": int(len(mutation_summary)),
+        "query_result_cache_hits": int(
+            rows_df.get("query_result_cache_hit", pd.Series(dtype=bool)).sum()
+        )
+        if not rows_df.empty
+        else 0,
     }
     _write_json(summary_path, summary_payload)
 
@@ -313,6 +324,8 @@ def compare_mutation_batch_approaches(
     inference_ckpt_path: str | Path | None = None,
     inference_ckpt_name: str | None = None,
     repo_dir: str | Path | None = None,
+    cache_query_results: bool = True,
+    subprocess_batch_size: int = 1,
 ) -> BatchApproachComparison:
     payload = build_mutation_scan_payload(
         query_prefix=experiment_name,
@@ -350,6 +363,8 @@ def compare_mutation_batch_approaches(
         inference_ckpt_path=inference_ckpt_path,
         inference_ckpt_name=inference_ckpt_name,
         repo_dir=repo_dir,
+        cache_query_results=cache_query_results,
+        subprocess_batch_size=subprocess_batch_size,
     )
 
     run_dir = runtime.results_dir / _slug_timestamp(f"{experiment_name}_compare")
@@ -366,6 +381,8 @@ def compare_mutation_batch_approaches(
             else None
         ),
         "screen_mutations_internal_total_seconds": screening_internal_total,
+        "cache_query_results": cache_query_results,
+        "subprocess_batch_size": max(1, subprocess_batch_size),
         "screen_mutations_query_result_cache_hits": int(
             screening_result.rows_df.get("query_result_cache_hit", pd.Series(dtype=bool)).sum()
         )
@@ -421,6 +438,8 @@ def run_server_end_to_end_smoke(
     inference_ckpt_name: str | None = None,
     repo_dir: str | Path | None = None,
     run_screening: bool = True,
+    cache_query_results: bool = True,
+    subprocess_batch_size: int = 1,
 ) -> ServerEndToEndResult:
     gpu_probe = _probe_gpu()
     single_result = run_prediction(
@@ -454,6 +473,8 @@ def run_server_end_to_end_smoke(
             inference_ckpt_path=inference_ckpt_path,
             inference_ckpt_name=inference_ckpt_name,
             repo_dir=repo_dir,
+            cache_query_results=cache_query_results,
+            subprocess_batch_size=subprocess_batch_size,
         )
 
     run_dir = runtime.results_dir / _slug_timestamp(f"{experiment_name}_server_e2e")
@@ -471,6 +492,8 @@ def run_server_end_to_end_smoke(
         "screening_output_dir": (
             str(screening_result.output_dir) if screening_result else None
         ),
+        "cache_query_results": cache_query_results,
+        "subprocess_batch_size": max(1, subprocess_batch_size),
     }
     _write_json(summary_path, summary)
     return ServerEndToEndResult(

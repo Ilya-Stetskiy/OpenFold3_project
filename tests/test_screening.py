@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import runpy
+import sys
 from pathlib import Path
 
 import pandas as pd
@@ -89,12 +91,16 @@ def test_run_screened_mutation_scan_builds_job_and_parses_results(
         position_1based=4,
         amino_acids="FG",
         include_wt=True,
+        cache_query_results=False,
+        subprocess_batch_size=4,
     )
 
     job = json.loads(result.job_json_path.read_text(encoding="utf-8"))
     assert result.elapsed_seconds == 3.5
     assert result.return_code == 0
     assert job["mutations"][0]["chain_id"] == "B"
+    assert job["cache_query_results"] is False
+    assert job["subprocess_batch_size"] == 4
     assert set(result.rows_df["mutation_label"]) == {"WT", "B_F4G"}
     assert not result.mutation_ranking.empty
 
@@ -216,11 +222,15 @@ def test_compare_mutation_batch_approaches_writes_speedup_summary(
         mutation_chain_id="B",
         position_1based=4,
         amino_acids="FG",
+        cache_query_results=False,
+        subprocess_batch_size=8,
     )
 
     assert isinstance(result, BatchApproachComparison)
     assert result.comparison["speedup_ratio"] == 3.0
     assert result.comparison["time_saved_seconds"] == 8.0
+    assert result.comparison["cache_query_results"] is False
+    assert result.comparison["subprocess_batch_size"] == 8
     assert result.summary_path.exists()
 
 
@@ -270,6 +280,8 @@ def test_run_server_end_to_end_smoke_writes_summary(
         mutation_chain_id="B",
         position_1based=4,
         amino_acids="FG",
+        cache_query_results=False,
+        subprocess_batch_size=6,
     )
 
     assert result.gpu_probe["available"] is True
@@ -277,3 +289,72 @@ def test_run_server_end_to_end_smoke_writes_summary(
     summary = json.loads(result.summary_path.read_text(encoding="utf-8"))
     assert summary["single_elapsed_seconds"] == 5.0
     assert summary["screening_elapsed_seconds"] == 7.0
+    assert summary["cache_query_results"] is False
+    assert summary["subprocess_batch_size"] == 6
+
+
+def test_run_compare_mutation_batch_script_invokes_workflow(
+    big_ace_molecules: list[dict],
+    monkeypatch,
+    tmp_path: Path,
+    capsys,
+) -> None:
+    query_json = tmp_path / "query.json"
+    query_json.write_text(
+        json.dumps({"queries": {"mini_query": {"chains": big_ace_molecules}}}),
+        encoding="utf-8",
+    )
+
+    captured: dict[str, object] = {}
+
+    class FakeResult:
+        summary_path = tmp_path / "comparison_summary.json"
+        comparison = {"speedup_ratio": 2.0, "cache_query_results": False}
+
+    monkeypatch.setattr("of_notebook_lib.RuntimeConfig", lambda: "runtime")
+
+    def fake_compare(**kwargs):
+        captured.update(kwargs)
+        return FakeResult()
+
+    monkeypatch.setattr(
+        "of_notebook_lib.workflows.compare_mutation_batch_case",
+        fake_compare,
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_compare_mutation_batch.py",
+            "--query-json",
+            str(query_json),
+            "--query-id",
+            "mini_query",
+            "--mutation-chain-id",
+            "B",
+            "--position-1based",
+            "4",
+            "--amino-acids",
+            "FG",
+            "--subprocess-batch-size",
+            "8",
+            "--no-query-result-cache",
+        ],
+    )
+
+    runpy.run_path(
+        str(
+            Path(__file__).resolve().parents[1]
+            / "server_smoke"
+            / "run_compare_mutation_batch.py"
+        ),
+        run_name="__main__",
+    )
+    stdout = capsys.readouterr().out
+
+    assert captured["runtime"] == "runtime"
+    assert captured["mutation_chain_id"] == "B"
+    assert captured["position_1based"] == 4
+    assert captured["cache_query_results"] is False
+    assert captured["subprocess_batch_size"] == 8
+    assert "summary_path=" in stdout

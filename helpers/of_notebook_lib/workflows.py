@@ -121,6 +121,8 @@ def run_screened_mutation_case(
     inference_ckpt_path: str | None = None,
     inference_ckpt_name: str | None = None,
     repo_dir: str | None = None,
+    cache_query_results: bool = True,
+    subprocess_batch_size: int = 1,
 ) -> ScreeningBatchResult:
     return run_screened_mutation_scan(
         runtime=runtime,
@@ -138,6 +140,8 @@ def run_screened_mutation_case(
         inference_ckpt_path=inference_ckpt_path,
         inference_ckpt_name=inference_ckpt_name,
         repo_dir=repo_dir,
+        cache_query_results=cache_query_results,
+        subprocess_batch_size=subprocess_batch_size,
     )
 
 
@@ -158,6 +162,8 @@ def compare_mutation_batch_case(
     inference_ckpt_path: str | None = None,
     inference_ckpt_name: str | None = None,
     repo_dir: str | None = None,
+    cache_query_results: bool = True,
+    subprocess_batch_size: int = 1,
 ) -> BatchApproachComparison:
     return compare_mutation_batch_approaches(
         runtime=runtime,
@@ -175,6 +181,8 @@ def compare_mutation_batch_case(
         inference_ckpt_path=inference_ckpt_path,
         inference_ckpt_name=inference_ckpt_name,
         repo_dir=repo_dir,
+        cache_query_results=cache_query_results,
+        subprocess_batch_size=subprocess_batch_size,
     )
 
 
@@ -196,6 +204,8 @@ def run_server_end_to_end_case(
     inference_ckpt_name: str | None = None,
     repo_dir: str | None = None,
     run_screening: bool = True,
+    cache_query_results: bool = True,
+    subprocess_batch_size: int = 1,
 ) -> ServerEndToEndResult:
     return run_server_end_to_end_smoke(
         runtime=runtime,
@@ -214,4 +224,6 @@ def run_server_end_to_end_case(
         inference_ckpt_name=inference_ckpt_name,
         repo_dir=repo_dir,
         run_screening=run_screening,
+        cache_query_results=cache_query_results,
+        subprocess_batch_size=subprocess_batch_size,
     )
