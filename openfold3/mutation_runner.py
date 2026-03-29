@@ -20,6 +20,7 @@ import csv
 import hashlib
 import json
 import logging
+import os
 import queue
 import shutil
 import subprocess
@@ -417,10 +418,37 @@ class SubprocessOpenFoldBackend:
             cmd += ["--inference_ckpt_name", self.job.inference_ckpt_name]
         return cmd
 
+    @staticmethod
+    def _predict_subprocess_env() -> dict[str, str]:
+        env = os.environ.copy()
+        warning_filters = [
+            "ignore::DeprecationWarning",
+            "ignore::FutureWarning",
+        ]
+        existing = env.get("PYTHONWARNINGS")
+        env["PYTHONWARNINGS"] = ",".join(
+            [*([existing] if existing else []), *warning_filters]
+        )
+        return env
+
+    @staticmethod
+    def _should_skip_subprocess_log_line(stripped: str) -> bool:
+        if stripped == "return data.pin_memory(device)":
+            return True
+
+        noisy_substrings = (
+            "DeprecationWarning:",
+            "FutureWarning:",
+            "The 'predict_dataloader' does not have many workers",
+            "`isinstance(treespec, LeafSpec)` is deprecated",
+        )
+        return any(token in stripped for token in noisy_substrings)
+
     def _run_predict(self, cmd: list[str], log_label: str) -> float:
         start = time.perf_counter()
         process = subprocess.Popen(
             cmd,
+            env=self._predict_subprocess_env(),
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
@@ -430,7 +458,11 @@ class SubprocessOpenFoldBackend:
         previous_line = None
         for line in process.stdout:
             stripped = line.strip()
-            if not stripped or stripped == previous_line:
+            if (
+                not stripped
+                or stripped == previous_line
+                or self._should_skip_subprocess_log_line(stripped)
+            ):
                 continue
             previous_line = stripped
             logger.info("[predict:%s] %s", log_label, stripped)

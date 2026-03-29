@@ -346,6 +346,28 @@ def test_parse_best_summary_row_keeps_zero_metrics(tmp_path):
     assert best["gpde"] == 0.0
 
 
+def test_subprocess_log_filter_skips_known_warning_noise():
+    backend = SubprocessOpenFoldBackend.__new__(SubprocessOpenFoldBackend)
+
+    assert (
+        backend._should_skip_subprocess_log_line(
+            "DeprecationWarning: The argument 'device' of Tensor.pin_memory() is deprecated."
+        )
+        is True
+    )
+    assert (
+        backend._should_skip_subprocess_log_line("return data.pin_memory(device)")
+        is True
+    )
+    assert (
+        backend._should_skip_subprocess_log_line(
+            "The 'predict_dataloader' does not have many workers which may be a bottleneck."
+        )
+        is True
+    )
+    assert backend._should_skip_subprocess_log_line("Predicting DataLoader 0: 5%|") is False
+
+
 def test_mutation_screening_runner_raises_for_unknown_mutation_chain(tmp_path):
     base_query = Query.model_validate(
         {
