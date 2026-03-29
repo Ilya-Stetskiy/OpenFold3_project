@@ -1,8 +1,7 @@
-# Faster exact-ish inference profile for large screening jobs on H100-class GPUs.
+# Faster exact inference profile for large screening jobs on H100-class GPUs.
 # Intentionally omits the `low_mem` preset to avoid extra offloading and cache clears.
+# Keep the default predict batch size for now: model-level batching >1 is still
+# experimental in the screening path and can finish without writing summary.jsonl.
 model_update:
   presets:
     - predict
-
-data_module_args:
-  batch_size: 2
