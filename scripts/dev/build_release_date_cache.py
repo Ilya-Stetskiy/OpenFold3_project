@@ -47,7 +47,8 @@ def _worker(args):
 def main():
     parser = argparse.ArgumentParser(
         description=(
-            "Build a JSON cache mapping PDB ID в†’ release date from a raw PDB directory."
+            "Build a JSON cache mapping PDB ID to release date "
+            "from a raw PDB directory."
         )
     )
     parser.add_argument(
@@ -99,4 +100,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

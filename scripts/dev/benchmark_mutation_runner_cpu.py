@@ -55,7 +55,14 @@ class BenchmarkBackend:
         )
 
 
-def build_job(root: Path, num_mutations: int, include_wt: bool) -> ScreeningJob:
+def build_job(
+    root: Path,
+    num_mutations: int,
+    include_wt: bool,
+    *,
+    cache_query_results: bool = True,
+    subprocess_batch_size: int = 1,
+) -> ScreeningJob:
     invariant_dir = root / "alignments_B"
     invariant_dir.mkdir(parents=True, exist_ok=True)
     (invariant_dir / "main.a3m").write_text(">query\nBBBB\n", encoding="utf-8")
@@ -93,10 +100,12 @@ def build_job(root: Path, num_mutations: int, include_wt: bool) -> ScreeningJob:
         output_dir=root / "screening",
         cache_dir=root / "cache",
         include_wt=include_wt,
+        cache_query_results=cache_query_results,
         run_baseline_first=True,
         output_policy="metrics_only",
         num_cpu_workers=1,
         max_inflight_queries=1,
+        subprocess_batch_size=subprocess_batch_size,
     )
 
 
@@ -119,6 +128,8 @@ def main() -> None:
     parser.add_argument("--repeats", type=int, default=5)
     parser.add_argument("--num-mutations", type=int, default=20)
     parser.add_argument("--include-wt", action="store_true")
+    parser.add_argument("--subprocess-batch-size", type=int, default=1)
+    parser.add_argument("--no-query-result-cache", action="store_true")
     args = parser.parse_args()
 
     output_root = args.output_root.resolve()
@@ -130,7 +141,13 @@ def main() -> None:
     for idx in range(args.repeats):
         run_root = output_root / f"cold_{idx}"
         shutil.rmtree(run_root, ignore_errors=True)
-        job = build_job(run_root, args.num_mutations, args.include_wt)
+        job = build_job(
+            run_root,
+            args.num_mutations,
+            args.include_wt,
+            cache_query_results=not args.no_query_result_cache,
+            subprocess_batch_size=args.subprocess_batch_size,
+        )
         started = time.perf_counter()
         rows = MutationScreeningRunner(backend=backend).run(job)
         cold_wall.append(time.perf_counter() - started)
@@ -142,8 +159,14 @@ def main() -> None:
     warm_cpu = []
     warm_cached_rows = []
     runner = MutationScreeningRunner(backend=backend)
-    for idx in range(args.repeats):
-        job = build_job(warm_root, args.num_mutations, args.include_wt)
+    for _idx in range(args.repeats):
+        job = build_job(
+            warm_root,
+            args.num_mutations,
+            args.include_wt,
+            cache_query_results=not args.no_query_result_cache,
+            subprocess_batch_size=args.subprocess_batch_size,
+        )
         started = time.perf_counter()
         rows = runner.run(job)
         warm_wall.append(time.perf_counter() - started)
@@ -154,6 +177,8 @@ def main() -> None:
         "repeats": args.repeats,
         "num_mutations": args.num_mutations,
         "include_wt": args.include_wt,
+        "cache_query_results": not args.no_query_result_cache,
+        "subprocess_batch_size": args.subprocess_batch_size,
         **summarize("cold_wall_seconds", cold_wall),
         **summarize("cold_cpu_prep_seconds", cold_cpu),
         **summarize("warm_wall_seconds", warm_wall),

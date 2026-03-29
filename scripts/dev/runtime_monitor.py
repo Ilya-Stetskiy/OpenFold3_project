@@ -78,7 +78,12 @@ def _load_average() -> float:
 
 
 class RunMonitor:
-    def __init__(self, summary_dir: Path, *, sample_interval_seconds: float = 1.0) -> None:
+    def __init__(
+        self,
+        summary_dir: Path,
+        *,
+        sample_interval_seconds: float = 1.0,
+    ) -> None:
         self.summary_dir = summary_dir
         self.sample_interval_seconds = sample_interval_seconds
         self.artifacts = MonitoringArtifacts(
@@ -112,7 +117,11 @@ class RunMonitor:
             ],
         )
         self._resource_writer.writeheader()
-        with self.artifacts.stage_marks_path.open("w", encoding="utf-8", newline="") as handle:
+        with self.artifacts.stage_marks_path.open(
+            "w",
+            encoding="utf-8",
+            newline="",
+        ) as handle:
             writer = csv.writer(handle)
             writer.writerow(["timestamp_utc", "elapsed_seconds", "stage", "details"])
         self.record_stage("monitor_started")
@@ -122,7 +131,11 @@ class RunMonitor:
     def record_stage(self, stage: str, details: str = "") -> None:
         timestamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         elapsed = time.monotonic() - self._started_at
-        with self.artifacts.stage_marks_path.open("a", encoding="utf-8", newline="") as handle:
+        with self.artifacts.stage_marks_path.open(
+            "a",
+            encoding="utf-8",
+            newline="",
+        ) as handle:
             writer = csv.writer(handle)
             writer.writerow([timestamp, f"{elapsed:.3f}", stage, details])
 
@@ -201,7 +214,9 @@ class RunMonitor:
             image.draw_polyline(points, color)
 
         for stage_elapsed in _read_stage_elapsed(self.artifacts.stage_marks_path):
-            x = left + int(chart_width * (min(stage_elapsed, max_elapsed) / max_elapsed))
+            x = left + int(
+                chart_width * (min(stage_elapsed, max_elapsed) / max_elapsed)
+            )
             image.draw_line(x, top, x, bottom, (160, 160, 160))
 
         image.write_png(self.artifacts.monitor_plot_path)
@@ -230,17 +245,35 @@ class _ImageCanvas:
         for y in range(self.height):
             self.rows[y] = row.copy()
 
-    def draw_rect(self, x0: int, y0: int, x1: int, y1: int, color: tuple[int, int, int]) -> None:
+    def draw_rect(
+        self,
+        x0: int,
+        y0: int,
+        x1: int,
+        y1: int,
+        color: tuple[int, int, int],
+    ) -> None:
         self.draw_line(x0, y0, x1, y0, color)
         self.draw_line(x0, y1, x1, y1, color)
         self.draw_line(x0, y0, x0, y1, color)
         self.draw_line(x1, y0, x1, y1, color)
 
-    def draw_polyline(self, points: list[tuple[int, int]], color: tuple[int, int, int]) -> None:
+    def draw_polyline(
+        self,
+        points: list[tuple[int, int]],
+        color: tuple[int, int, int],
+    ) -> None:
         for start, end in zip(points, points[1:]):
             self.draw_line(start[0], start[1], end[0], end[1], color)
 
-    def draw_line(self, x0: int, y0: int, x1: int, y1: int, color: tuple[int, int, int]) -> None:
+    def draw_line(
+        self,
+        x0: int,
+        y0: int,
+        x1: int,
+        y1: int,
+        color: tuple[int, int, int],
+    ) -> None:
         dx = abs(x1 - x0)
         dy = -abs(y1 - y0)
         sx = 1 if x0 < x1 else -1

@@ -8,12 +8,10 @@ from click.testing import CliRunner
 
 from openfold3.mutation_runner import (
     MutationScreeningRunner,
-    MutationSpec,
     ScreeningJob,
     ScreeningResultRow,
     run_screening_job_from_json,
 )
-from openfold3.projects.of3_all_atom.config.inference_query_format import Query
 from openfold3.run_openfold import cli
 from scripts.dev import run_nightly_test_suite, run_overnight_screening
 
@@ -189,6 +187,7 @@ def test_run_overnight_screening_build_screening_job_truncates_csv_and_writes_ma
         max_mutations=1,
         num_cpu_workers=2,
         max_inflight_queries=2,
+        subprocess_batch_size=4,
         min_free_disk_gb=1.0,
         inference_ckpt_path=None,
         inference_ckpt_name=None,
@@ -197,6 +196,7 @@ def test_run_overnight_screening_build_screening_job_truncates_csv_and_writes_ma
         include_wt=True,
         keep_query_outputs=False,
         no_resume=False,
+        no_query_result_cache=True,
     )
 
     job = run_overnight_screening.build_screening_job(args)
@@ -208,6 +208,10 @@ def test_run_overnight_screening_build_screening_job_truncates_csv_and_writes_ma
     assert job.mutations[0].mutation_id == "A_C2G"
     assert launch_manifest["mutation_count"] == 1
     assert launch_manifest["max_mutations"] == 1
+    assert job.cache_query_results is False
+    assert job.subprocess_batch_size == 4
+    assert launch_manifest["cache_query_results"] is False
+    assert launch_manifest["subprocess_batch_size"] == 4
 
 
 def test_run_overnight_screening_main_invokes_runner_with_built_job(

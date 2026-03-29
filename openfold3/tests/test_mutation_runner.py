@@ -12,8 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import json
 import csv
+import json
 from pathlib import Path
 
 from openfold3.mutation_runner import (
@@ -30,6 +30,40 @@ from openfold3.mutation_runner import (
 from openfold3.projects.of3_all_atom.config.inference_query_format import Query
 
 
+def _result_row_from_prepared_job(prepared_job) -> ScreeningResultRow:
+    return ScreeningResultRow(
+        mutation_id=prepared_job.mutation_id,
+        query_id=prepared_job.query_id,
+        query_hash=prepared_job.query_hash,
+        sample_index=1,
+        seed=42,
+        sample_ranking_score=0.8,
+        iptm=0.7,
+        ptm=0.6,
+        avg_plddt=0.9,
+        gpde=1.2,
+        has_clash=0.0,
+        cache_hit=prepared_job.cache_hit,
+        sequence_cache_hits=prepared_job.sequence_cache_hits,
+        query_result_cache_hit=False,
+        cpu_prep_seconds=prepared_job.cpu_prep_seconds,
+        gpu_inference_seconds=0.01,
+        total_seconds=prepared_job.cpu_prep_seconds + 0.01,
+        output_dir=str(prepared_job.output_dir),
+        aggregated_confidence_path=None,
+        mutation_spec=(
+            None
+            if prepared_job.mutation_spec is None
+            else {
+                "chain_id": prepared_job.mutation_spec.chain_id,
+                "position_1based": prepared_job.mutation_spec.position_1based,
+                "from_residue": prepared_job.mutation_spec.from_residue,
+                "to_residue": prepared_job.mutation_spec.to_residue,
+            }
+        ),
+    )
+
+
 class FakeBackend:
     def __init__(self):
         self.calls = 0
@@ -42,37 +76,26 @@ class FakeBackend:
         self.payload_sequences.append(
             [chain.get("sequence") for chain in query["chains"] if chain.get("sequence")]
         )
-        return ScreeningResultRow(
-            mutation_id=prepared_job.mutation_id,
-            query_id=prepared_job.query_id,
-            query_hash=prepared_job.query_hash,
-            sample_index=1,
-            seed=42,
-            sample_ranking_score=0.8,
-            iptm=0.7,
-            ptm=0.6,
-            avg_plddt=0.9,
-            gpde=1.2,
-            has_clash=0.0,
-            cache_hit=prepared_job.cache_hit,
-            sequence_cache_hits=prepared_job.sequence_cache_hits,
-            query_result_cache_hit=False,
-            cpu_prep_seconds=prepared_job.cpu_prep_seconds,
-            gpu_inference_seconds=0.01,
-            total_seconds=prepared_job.cpu_prep_seconds + 0.01,
-            output_dir=str(prepared_job.output_dir),
-            aggregated_confidence_path=None,
-            mutation_spec=(
-                None
-                if prepared_job.mutation_spec is None
-                else {
-                    "chain_id": prepared_job.mutation_spec.chain_id,
-                    "position_1based": prepared_job.mutation_spec.position_1based,
-                    "from_residue": prepared_job.mutation_spec.from_residue,
-                    "to_residue": prepared_job.mutation_spec.to_residue,
-                }
-            ),
-        )
+        return _result_row_from_prepared_job(prepared_job)
+
+
+class BatchRecordingBackend:
+    def __init__(self):
+        self.batch_sizes = []
+        self.query_id_batches = []
+        self.run_calls = 0
+
+    def run(self, prepared_job):
+        self.run_calls += 1
+        raise AssertionError("run() should not be used when run_batch() is available")
+
+    def run_batch(self, prepared_jobs):
+        self.batch_sizes.append(len(prepared_jobs))
+        self.query_id_batches.append([job.query_id for job in prepared_jobs])
+        return [
+            _result_row_from_prepared_job(prepared_job)
+            for prepared_job in prepared_jobs
+        ]
 
 
 def test_apply_point_mutation():
@@ -865,3 +888,77 @@ def test_mutation_screening_runner_marks_second_run_rows_as_cached(tmp_path):
     assert backend.calls == 2
     assert all(row.cache_hit is True for row in second_rows)
     assert all(row.query_result_cache_hit is True for row in second_rows)
+
+
+def test_mutation_screening_runner_skips_query_result_cache_when_disabled(tmp_path):
+    base_query = Query.model_validate(
+        {
+            "chains": [
+                {"molecule_type": "protein", "chain_ids": ["A"], "sequence": "ACDE"},
+            ]
+        }
+    )
+
+    job = ScreeningJob(
+        base_query=base_query,
+        mutations=[
+            MutationSpec(chain_id="A", position_1based=2, from_residue="C", to_residue="G")
+        ],
+        output_dir=tmp_path / "screening",
+        cache_dir=tmp_path / "cache",
+        include_wt=True,
+        run_baseline_first=True,
+        output_policy="metrics_only",
+        cache_query_results=False,
+        num_cpu_workers=1,
+        max_inflight_queries=1,
+    )
+    backend = FakeBackend()
+    runner = MutationScreeningRunner(backend=backend)
+
+    first_rows = runner.run(job)
+    second_rows = runner.run(job)
+    manifest = json.loads((job.output_dir / "screening_manifest.json").read_text())
+
+    assert len(first_rows) == len(second_rows) == 2
+    assert backend.calls == 4
+    assert not (job.cache_dir / "results").exists()
+    assert all(row.query_result_cache_hit is False for row in second_rows)
+    assert manifest["cache_query_results"] is False
+
+
+def test_mutation_screening_runner_batches_prepared_jobs_when_configured(tmp_path):
+    base_query = Query.model_validate(
+        {
+            "chains": [
+                {"molecule_type": "protein", "chain_ids": ["A"], "sequence": "ACDEFG"},
+            ]
+        }
+    )
+
+    job = ScreeningJob(
+        base_query=base_query,
+        mutations=[
+            MutationSpec(chain_id="A", position_1based=2, from_residue="C", to_residue="G"),
+            MutationSpec(chain_id="A", position_1based=3, from_residue="D", to_residue="Y"),
+            MutationSpec(chain_id="A", position_1based=4, from_residue="E", to_residue="K"),
+        ],
+        output_dir=tmp_path / "screening",
+        cache_dir=tmp_path / "cache",
+        include_wt=False,
+        output_policy="metrics_only",
+        subprocess_batch_size=2,
+        num_cpu_workers=3,
+        max_inflight_queries=3,
+    )
+    backend = BatchRecordingBackend()
+
+    rows = MutationScreeningRunner(backend=backend).run(job)
+    manifest = json.loads((job.output_dir / "screening_manifest.json").read_text())
+
+    assert len(rows) == 3
+    assert backend.run_calls == 0
+    assert sum(backend.batch_sizes) == 3
+    assert max(backend.batch_sizes) == 2
+    assert any(batch_size > 1 for batch_size in backend.batch_sizes)
+    assert manifest["subprocess_batch_size"] == 2

@@ -5,7 +5,6 @@ import csv
 import json
 from pathlib import Path
 
-
 DEFAULT_AMINO_ACIDS = "ACDEFGHIKLMNPQRSTVWY"
 
 

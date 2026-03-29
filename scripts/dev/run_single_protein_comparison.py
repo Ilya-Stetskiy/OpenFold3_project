@@ -62,6 +62,8 @@ def build_screening_job(
     use_templates: bool,
     inference_ckpt_path: str | None,
     inference_ckpt_name: str | None,
+    cache_query_results: bool = True,
+    subprocess_batch_size: int = 1,
 ) -> dict[str, Any]:
     job = {
         "base_query": query_payload,
@@ -75,8 +77,10 @@ def build_screening_job(
         "template_policy": "reuse_precomputed",
         "output_policy": "metrics_only",
         "resume": True,
+        "cache_query_results": cache_query_results,
         "num_cpu_workers": 1,
         "max_inflight_queries": 1,
+        "subprocess_batch_size": subprocess_batch_size,
         "num_diffusion_samples": num_diffusion_samples,
         "num_model_seeds": num_model_seeds,
         "runner_yaml": str(runner_yaml),
@@ -139,6 +143,8 @@ def main() -> None:
     parser.add_argument("--inference-ckpt-name", type=str, default=None)
     parser.add_argument("--python-bin", type=str, default=sys.executable)
     parser.add_argument("--tolerance", type=float, default=0.1)
+    parser.add_argument("--subprocess-batch-size", type=int, default=1)
+    parser.add_argument("--no-query-result-cache", action="store_true")
     args = parser.parse_args()
 
     repo_root = Path.cwd()
@@ -162,6 +168,8 @@ def main() -> None:
         use_templates=args.use_templates,
         inference_ckpt_path=args.inference_ckpt_path,
         inference_ckpt_name=args.inference_ckpt_name,
+        cache_query_results=not args.no_query_result_cache,
+        subprocess_batch_size=args.subprocess_batch_size,
     )
     dump_json(screening_job_path, screening_job)
 
@@ -229,6 +237,8 @@ def main() -> None:
             if screening_elapsed_seconds > 0
             else None
         ),
+        "cache_query_results": not args.no_query_result_cache,
+        "subprocess_batch_size": args.subprocess_batch_size,
         "screening_internal_total_seconds": screening_best.get("total_seconds"),
         "screening_internal_cpu_prep_seconds": screening_best.get(
             "cpu_prep_seconds"

@@ -64,12 +64,16 @@ def test_build_screening_job_includes_optional_checkpoint_fields(tmp_path):
         use_templates=False,
         inference_ckpt_path="checkpoint.pt",
         inference_ckpt_name="ckpt-name",
+        cache_query_results=False,
+        subprocess_batch_size=8,
     )
 
     assert job["include_wt"] is True
     assert job["num_diffusion_samples"] == 4
     assert job["inference_ckpt_path"] == "checkpoint.pt"
     assert job["inference_ckpt_name"] == "ckpt-name"
+    assert job["cache_query_results"] is False
+    assert job["subprocess_batch_size"] == 8
 
 
 def test_run_single_protein_comparison_main_writes_summary(tmp_path, monkeypatch):
@@ -158,6 +162,9 @@ def test_run_single_protein_comparison_main_writes_summary(tmp_path, monkeypatch
             "4",
             "--num-model-seeds",
             "1",
+            "--subprocess-batch-size",
+            "4",
+            "--no-query-result-cache",
         ],
     )
 
@@ -169,13 +176,23 @@ def test_run_single_protein_comparison_main_writes_summary(tmp_path, monkeypatch
     assert summary["comparison"]["within_tolerance"] is True
     assert summary["timing"]["baseline_elapsed_seconds"] == 3.0
     assert summary["timing"]["screening_elapsed_seconds"] == 2.5
+    assert summary["timing"]["cache_query_results"] is False
+    assert summary["timing"]["subprocess_batch_size"] == 4
 
 
 def test_benchmark_build_job_creates_expected_number_of_mutations(tmp_path):
-    job = benchmark_mutation_runner_cpu.build_job(tmp_path, num_mutations=6, include_wt=True)
+    job = benchmark_mutation_runner_cpu.build_job(
+        tmp_path,
+        num_mutations=6,
+        include_wt=True,
+        cache_query_results=False,
+        subprocess_batch_size=3,
+    )
 
     assert len(job.mutations) == 6
     assert job.include_wt is True
+    assert job.cache_query_results is False
+    assert job.subprocess_batch_size == 3
     assert job.base_query.chains[1].main_msa_file_paths is not None
 
 
@@ -205,6 +222,9 @@ def test_benchmark_main_writes_summary_json(tmp_path, monkeypatch):
             "--num-mutations",
             "4",
             "--include-wt",
+            "--subprocess-batch-size",
+            "3",
+            "--no-query-result-cache",
         ],
     )
 
@@ -214,6 +234,8 @@ def test_benchmark_main_writes_summary_json(tmp_path, monkeypatch):
     assert summary["repeats"] == 2
     assert summary["num_mutations"] == 4
     assert summary["include_wt"] is True
+    assert summary["cache_query_results"] is False
+    assert summary["subprocess_batch_size"] == 3
     assert len(summary["warm_cached_rows_per_run"]) == 2
     assert "cold_wall_seconds_median" in summary
     assert "warm_cpu_prep_seconds_median" in summary

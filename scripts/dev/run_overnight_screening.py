@@ -99,8 +99,10 @@ def build_screening_job(args) -> ScreeningJob:
         template_policy="reuse_precomputed",
         output_policy="metrics_only",
         resume=not args.no_resume,
+        cache_query_results=not args.no_query_result_cache,
         num_cpu_workers=args.num_cpu_workers,
         max_inflight_queries=args.max_inflight_queries,
+        subprocess_batch_size=args.subprocess_batch_size,
         num_diffusion_samples=args.num_diffusion_samples,
         num_model_seeds=args.num_model_seeds,
         runner_yaml=args.runner_yaml.resolve() if args.runner_yaml else None,
@@ -137,8 +139,10 @@ def build_screening_job(args) -> ScreeningJob:
         "template_policy": job.template_policy,
         "output_policy": job.output_policy,
         "resume": job.resume,
+        "cache_query_results": job.cache_query_results,
         "num_cpu_workers": job.num_cpu_workers,
         "max_inflight_queries": job.max_inflight_queries,
+        "subprocess_batch_size": job.subprocess_batch_size,
         "num_diffusion_samples": job.num_diffusion_samples,
         "num_model_seeds": job.num_model_seeds,
         "runner_yaml": str(job.runner_yaml) if job.runner_yaml else None,
@@ -165,6 +169,8 @@ def build_screening_job(args) -> ScreeningJob:
             "query_prefix": job.query_prefix,
             "num_diffusion_samples": job.num_diffusion_samples,
             "num_model_seeds": job.num_model_seeds,
+            "cache_query_results": job.cache_query_results,
+            "subprocess_batch_size": job.subprocess_batch_size,
             "min_free_disk_gb": job.min_free_disk_gb,
             "cleanup_query_outputs": job.cleanup_query_outputs,
         },
@@ -187,6 +193,7 @@ def main() -> None:
         "--num-cpu-workers", type=int, default=(__import__("os").cpu_count() or 1)
     )
     parser.add_argument("--max-inflight-queries", type=int, default=2)
+    parser.add_argument("--subprocess-batch-size", type=int, default=1)
     parser.add_argument("--min-free-disk-gb", type=float, default=1.0)
     parser.add_argument("--inference-ckpt-path", type=Path, default=None)
     parser.add_argument("--inference-ckpt-name", type=str, default=None)
@@ -195,6 +202,7 @@ def main() -> None:
     parser.add_argument("--include-wt", action="store_true")
     parser.add_argument("--keep-query-outputs", action="store_true")
     parser.add_argument("--no-resume", action="store_true")
+    parser.add_argument("--no-query-result-cache", action="store_true")
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -209,4 +217,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
