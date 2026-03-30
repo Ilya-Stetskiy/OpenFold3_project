@@ -1,0 +1,1033 @@
+from __future__ import annotations
+
+import json
+import logging
+import os
+import queue
+import shutil
+import sqlite3
+import subprocess
+import sys
+import threading
+import time
+from dataclasses import asdict, dataclass
+from pathlib import Path
+from typing import Any, Iterable
+
+from openfold3.benchmark.harness import DdgBenchmarkHarness
+from openfold3.benchmark.methods import multiscale_methods
+from openfold3.benchmark.models import BenchmarkCase, MutationInput
+from openfold3.mutation_runner import CANONICAL_AA, apply_point_mutation
+from openfold3.projects.of3_all_atom.config.inference_query_format import (
+    InferenceQuerySet,
+    Query,
+)
+
+logger = logging.getLogger(__name__)
+
+
+def _json_default(value: Any):
+    if isinstance(value, Path):
+        return str(value)
+    raise TypeError(f"Object of type {type(value)!r} is not JSON serializable")
+
+
+def _sort_key(row: dict[str, Any]) -> tuple[bool, float, float, float, float, float]:
+    def _metric(value: Any, default: float) -> float:
+        return default if value is None else float(value)
+
+    return (
+        row.get("sample_ranking_score") is not None,
+        _metric(row.get("sample_ranking_score"), float("-inf")),
+        _metric(row.get("iptm"), float("-inf")),
+        _metric(row.get("ptm"), float("-inf")),
+        _metric(row.get("avg_plddt"), float("-inf")),
+        -_metric(row.get("gpde"), float("inf")),
+    )
+
+
+def _load_single_query(query_json: Path) -> tuple[str, Query]:
+    query_set = InferenceQuerySet.from_json(query_json)
+    if len(query_set.queries) != 1:
+        raise ValueError(
+            f"Expected exactly one WT query in {query_json}, got {len(query_set.queries)}"
+        )
+    return next(iter(query_set.queries.items()))
+
+
+def _clone_query(query: Query) -> Query:
+    return Query.model_validate(query.model_dump())
+
+
+def _find_chain_sequence(query: Query, mutable_chain_id: str) -> str:
+    for chain in query.chains:
+        if mutable_chain_id in chain.chain_ids and chain.sequence is not None:
+            return str(chain.sequence)
+    raise ValueError(f"Could not find mutable protein chain {mutable_chain_id}")
+
+
+def _panel_id(
+    target_id: str, chain_id: str, from_residue: str, position_1based: int
+) -> str:
+    return f"{target_id}_{chain_id}_{from_residue.upper()}{position_1based}"
+
+
+def _job_id(panel_id: str, to_residue: str) -> str:
+    return f"{panel_id}{to_residue.upper()}"
+
+
+def _best_summary_rows(summary_path: Path) -> dict[str, dict[str, Any]]:
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for line in summary_path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        row = json.loads(line)
+        query_id = row.get("query_id")
+        if not query_id:
+            continue
+        grouped.setdefault(str(query_id), []).append(row)
+    return {query_id: max(rows, key=_sort_key) for query_id, rows in grouped.items()}
+
+
+def _infer_structure_path(aggregated_confidence_path: str | None) -> Path | None:
+    if aggregated_confidence_path is None:
+        return None
+    path = Path(aggregated_confidence_path)
+    if not path.exists():
+        return None
+    name = path.name
+    if name.endswith("_confidences_aggregated.json"):
+        prefix = name.removesuffix("_confidences_aggregated.json")
+    elif name.endswith("_confidences.json"):
+        prefix = name.removesuffix("_confidences.json")
+    else:
+        prefix = path.stem
+    candidates = [
+        path.with_name(f"{prefix}_model.cif"),
+        path.with_name(f"{prefix}_model.pdb"),
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return None
+
+
+@dataclass(frozen=True)
+class MutationPanel:
+    panel_id: str
+    chain_id: str
+    position_1based: int
+    from_residue: str
+    job_ids: tuple[str, ...]
+    mutations: tuple[MutationInput, ...]
+
+
+@dataclass(frozen=True)
+class PanelStandConfig:
+    target_id: str
+    wt_query_json: Path
+    output_root: Path
+    mutable_chain_id: str
+    positions: tuple[int, ...]
+    runner_yaml: Path | None = None
+    inference_ckpt_path: Path | None = None
+    inference_ckpt_name: str | None = None
+    msa_computation_settings_yaml: Path | None = None
+    num_diffusion_samples: int | None = None
+    num_model_seeds: int | None = None
+    msa_panel_workers: int = 1
+    analysis_workers: int = 4
+    cleanup_intermediates: bool = True
+
+
+class PanelStandState:
+    def __init__(self, path: Path):
+        self.path = path
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._lock = threading.Lock()
+        self.conn = sqlite3.connect(self.path, check_same_thread=False)
+        self.conn.row_factory = sqlite3.Row
+        self.conn.execute("PRAGMA journal_mode=WAL")
+        self._init_schema()
+
+    def close(self) -> None:
+        self.conn.close()
+
+    def _init_schema(self) -> None:
+        with self._lock:
+            self.conn.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS wt_baseline (
+                    target_id TEXT PRIMARY KEY,
+                    query_id TEXT NOT NULL,
+                    msa_status TEXT NOT NULL DEFAULT 'pending',
+                    predict_status TEXT NOT NULL DEFAULT 'pending',
+                    analysis_status TEXT NOT NULL DEFAULT 'pending',
+                    msa_dir TEXT,
+                    msa_query_json TEXT,
+                    predict_dir TEXT,
+                    structure_path TEXT,
+                    confidence_path TEXT,
+                    rosetta_score REAL,
+                    wt_report_path TEXT,
+                    last_error TEXT,
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                );
+
+                CREATE TABLE IF NOT EXISTS panels (
+                    panel_id TEXT PRIMARY KEY,
+                    target_id TEXT NOT NULL,
+                    chain_id TEXT NOT NULL,
+                    position_1based INTEGER NOT NULL,
+                    from_residue TEXT NOT NULL,
+                    msa_status TEXT NOT NULL DEFAULT 'pending',
+                    predict_status TEXT NOT NULL DEFAULT 'pending',
+                    cleanup_status TEXT NOT NULL DEFAULT 'pending',
+                    query_json_path TEXT NOT NULL,
+                    msa_dir TEXT NOT NULL,
+                    msa_query_json TEXT,
+                    predict_dir TEXT NOT NULL,
+                    last_error TEXT,
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                );
+
+                CREATE TABLE IF NOT EXISTS jobs (
+                    job_id TEXT PRIMARY KEY,
+                    panel_id TEXT NOT NULL,
+                    target_id TEXT NOT NULL,
+                    query_id TEXT NOT NULL,
+                    chain_id TEXT NOT NULL,
+                    position_1based INTEGER NOT NULL,
+                    from_residue TEXT NOT NULL,
+                    to_residue TEXT NOT NULL,
+                    predict_status TEXT NOT NULL DEFAULT 'pending',
+                    analysis_status TEXT NOT NULL DEFAULT 'pending',
+                    structure_path TEXT,
+                    confidence_path TEXT,
+                    report_path TEXT,
+                    rosetta_delta_vs_wt REAL,
+                    last_error TEXT,
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY(panel_id) REFERENCES panels(panel_id)
+                );
+
+                CREATE TABLE IF NOT EXISTS method_results (
+                    job_id TEXT NOT NULL,
+                    method TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    score REAL,
+                    units TEXT,
+                    details_json TEXT NOT NULL,
+                    PRIMARY KEY(job_id, method),
+                    FOREIGN KEY(job_id) REFERENCES jobs(job_id)
+                );
+                """
+            )
+            self.conn.commit()
+
+    def upsert_wt(self, target_id: str, query_id: str) -> None:
+        with self._lock:
+            self.conn.execute(
+                """
+                INSERT INTO wt_baseline (target_id, query_id)
+                VALUES (?, ?)
+                ON CONFLICT(target_id) DO UPDATE SET
+                    query_id=excluded.query_id,
+                    updated_at=CURRENT_TIMESTAMP
+                """,
+                (target_id, query_id),
+            )
+            self.conn.commit()
+
+    def upsert_panel(self, target_id: str, panel: MutationPanel, panel_dir: Path) -> None:
+        query_json_path = panel_dir / "queries.json"
+        msa_dir = panel_dir / "msa"
+        predict_dir = panel_dir / "predict"
+        with self._lock:
+            self.conn.execute(
+                """
+                INSERT INTO panels (
+                    panel_id, target_id, chain_id, position_1based, from_residue,
+                    query_json_path, msa_dir, predict_dir
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(panel_id) DO UPDATE SET
+                    target_id=excluded.target_id,
+                    chain_id=excluded.chain_id,
+                    position_1based=excluded.position_1based,
+                    from_residue=excluded.from_residue,
+                    query_json_path=excluded.query_json_path,
+                    msa_dir=excluded.msa_dir,
+                    predict_dir=excluded.predict_dir,
+                    updated_at=CURRENT_TIMESTAMP
+                """,
+                (
+                    panel.panel_id,
+                    target_id,
+                    panel.chain_id,
+                    panel.position_1based,
+                    panel.from_residue,
+                    str(query_json_path),
+                    str(msa_dir),
+                    str(predict_dir),
+                ),
+            )
+            for job_id, mutation in zip(panel.job_ids, panel.mutations, strict=True):
+                self.conn.execute(
+                    """
+                    INSERT INTO jobs (
+                        job_id, panel_id, target_id, query_id, chain_id,
+                        position_1based, from_residue, to_residue
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(job_id) DO UPDATE SET
+                        panel_id=excluded.panel_id,
+                        target_id=excluded.target_id,
+                        query_id=excluded.query_id,
+                        chain_id=excluded.chain_id,
+                        position_1based=excluded.position_1based,
+                        from_residue=excluded.from_residue,
+                        to_residue=excluded.to_residue,
+                        updated_at=CURRENT_TIMESTAMP
+                    """,
+                    (
+                        job_id,
+                        panel.panel_id,
+                        target_id,
+                        job_id,
+                        mutation.chain_id,
+                        mutation.position_1based,
+                        mutation.from_residue,
+                        mutation.to_residue,
+                    ),
+                )
+            self.conn.commit()
+
+    def fetch_wt(self, target_id: str) -> sqlite3.Row | None:
+        with self._lock:
+            return self.conn.execute(
+                "SELECT * FROM wt_baseline WHERE target_id = ?",
+                (target_id,),
+            ).fetchone()
+
+    def fetch_panel(self, panel_id: str) -> sqlite3.Row | None:
+        with self._lock:
+            return self.conn.execute(
+                "SELECT * FROM panels WHERE panel_id = ?",
+                (panel_id,),
+            ).fetchone()
+
+    def fetch_job(self, job_id: str) -> sqlite3.Row | None:
+        with self._lock:
+            return self.conn.execute(
+                "SELECT * FROM jobs WHERE job_id = ?",
+                (job_id,),
+            ).fetchone()
+
+    def list_jobs_for_panel(self, panel_id: str) -> list[sqlite3.Row]:
+        with self._lock:
+            return list(
+                self.conn.execute(
+                    "SELECT * FROM jobs WHERE panel_id = ? ORDER BY job_id",
+                    (panel_id,),
+                )
+            )
+
+    def list_panels(self) -> list[sqlite3.Row]:
+        with self._lock:
+            return list(self.conn.execute("SELECT * FROM panels ORDER BY panel_id"))
+
+    def set_wt_stage(self, target_id: str, stage: str, status: str, **extra: Any) -> None:
+        columns = [f"{stage}_status = ?", "updated_at = CURRENT_TIMESTAMP"]
+        values: list[Any] = [status]
+        for key, value in extra.items():
+            columns.append(f"{key} = ?")
+            values.append(None if value is None else str(value) if isinstance(value, Path) else value)
+        values.append(target_id)
+        with self._lock:
+            self.conn.execute(
+                f"UPDATE wt_baseline SET {', '.join(columns)} WHERE target_id = ?",
+                values,
+            )
+            self.conn.commit()
+
+    def set_panel_stage(self, panel_id: str, stage: str, status: str, **extra: Any) -> None:
+        columns = [f"{stage}_status = ?", "updated_at = CURRENT_TIMESTAMP"]
+        values: list[Any] = [status]
+        for key, value in extra.items():
+            columns.append(f"{key} = ?")
+            values.append(None if value is None else str(value) if isinstance(value, Path) else value)
+        values.append(panel_id)
+        with self._lock:
+            self.conn.execute(
+                f"UPDATE panels SET {', '.join(columns)} WHERE panel_id = ?",
+                values,
+            )
+            self.conn.commit()
+
+    def update_job_predict(
+        self,
+        job_id: str,
+        *,
+        status: str,
+        structure_path: Path | None,
+        confidence_path: Path | None,
+        last_error: str | None = None,
+    ) -> None:
+        with self._lock:
+            self.conn.execute(
+                """
+                UPDATE jobs
+                SET predict_status = ?, structure_path = ?, confidence_path = ?,
+                    last_error = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE job_id = ?
+                """,
+                (
+                    status,
+                    None if structure_path is None else str(structure_path),
+                    None if confidence_path is None else str(confidence_path),
+                    last_error,
+                    job_id,
+                ),
+            )
+            self.conn.commit()
+
+    def update_job_analysis(
+        self,
+        job_id: str,
+        *,
+        status: str,
+        report_path: Path | None,
+        rosetta_delta_vs_wt: float | None,
+        last_error: str | None = None,
+    ) -> None:
+        with self._lock:
+            self.conn.execute(
+                """
+                UPDATE jobs
+                SET analysis_status = ?, report_path = ?, rosetta_delta_vs_wt = ?,
+                    last_error = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE job_id = ?
+                """,
+                (
+                    status,
+                    None if report_path is None else str(report_path),
+                    rosetta_delta_vs_wt,
+                    last_error,
+                    job_id,
+                ),
+            )
+            self.conn.commit()
+
+    def replace_method_results(self, job_id: str, results: Iterable[dict[str, Any]]) -> None:
+        with self._lock:
+            self.conn.execute("DELETE FROM method_results WHERE job_id = ?", (job_id,))
+            for result in results:
+                self.conn.execute(
+                    """
+                    INSERT INTO method_results (job_id, method, status, score, units, details_json)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        job_id,
+                        result["method"],
+                        result["status"],
+                        result["score"],
+                        result["units"],
+                        json.dumps(result["details"], sort_keys=True, default=_json_default),
+                    ),
+                )
+            self.conn.commit()
+
+    def fetch_method_score(self, job_id: str, method: str) -> float | None:
+        with self._lock:
+            row = self.conn.execute(
+                "SELECT score FROM method_results WHERE job_id = ? AND method = ?",
+                (job_id, method),
+            ).fetchone()
+        if row is None:
+            return None
+        value = row["score"]
+        return None if value is None else float(value)
+
+    def panel_is_ready_for_cleanup(self, panel_id: str) -> bool:
+        with self._lock:
+            rows = list(
+                self.conn.execute(
+                    "SELECT analysis_status FROM jobs WHERE panel_id = ?",
+                    (panel_id,),
+                )
+            )
+        return bool(rows) and all(row["analysis_status"] == "done" for row in rows)
+
+    def summary(self) -> dict[str, Any]:
+        with self._lock:
+            panel_rows = list(
+                self.conn.execute(
+                    """
+                    SELECT msa_status, predict_status, cleanup_status, COUNT(*) AS n
+                    FROM panels
+                    GROUP BY msa_status, predict_status, cleanup_status
+                    """
+                )
+            )
+            job_rows = list(
+                self.conn.execute(
+                    """
+                    SELECT predict_status, analysis_status, COUNT(*) AS n
+                    FROM jobs
+                    GROUP BY predict_status, analysis_status
+                    """
+                )
+            )
+        return {
+            "panels": [dict(row) for row in panel_rows],
+            "jobs": [dict(row) for row in job_rows],
+        }
+
+
+class PanelDdgStandRunner:
+    def __init__(self, config: PanelStandConfig):
+        self.config = config
+        self.output_root = config.output_root.resolve()
+        self.output_root.mkdir(parents=True, exist_ok=True)
+        self.db = PanelStandState(self.output_root / "state.sqlite")
+        self.harness = DdgBenchmarkHarness(methods=multiscale_methods())
+        self.analysis_allowed = threading.Event()
+        self.predict_queue: queue.Queue[str | None] = queue.Queue()
+        self.analysis_queue: queue.Queue[str | None] = queue.Queue()
+        self._deferred_analysis_job_ids: list[str] = []
+        self._deferred_analysis_lock = threading.Lock()
+        self._log_lock = threading.Lock()
+
+    def close(self) -> None:
+        self.db.close()
+
+    def _log(self, message: str) -> None:
+        with self._log_lock:
+            print(message, flush=True)
+        logger.info(message)
+
+    def _python_cmd_prefix(self) -> list[str]:
+        return [sys.executable, "-m", "openfold3.run_openfold"]
+
+    def _run_subprocess(self, command: list[str], prefix: str, cwd: Path | None = None) -> None:
+        env = dict(os.environ)
+        process = subprocess.Popen(
+            command,
+            cwd=None if cwd is None else str(cwd),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+            env=env,
+        )
+        assert process.stdout is not None
+        for line in process.stdout:
+            self._log(f"[{prefix}] {line.rstrip()}")
+        return_code = process.wait()
+        if return_code != 0:
+            raise subprocess.CalledProcessError(return_code, command)
+
+    def _panel_dir(self, panel_id: str) -> Path:
+        return self.output_root / "panels" / panel_id
+
+    def _report_path(self, job_id: str) -> Path:
+        return self.output_root / "reports" / f"{job_id}.json"
+
+    def _wt_dir(self) -> Path:
+        return self.output_root / "wt"
+
+    def _build_panels(self) -> tuple[str, Query, list[MutationPanel]]:
+        wt_query_id, wt_query = _load_single_query(self.config.wt_query_json)
+        sequence = _find_chain_sequence(wt_query, self.config.mutable_chain_id)
+        panels: list[MutationPanel] = []
+        for position in self.config.positions:
+            from_residue = sequence[position - 1]
+            panel_name = _panel_id(
+                self.config.target_id,
+                self.config.mutable_chain_id,
+                from_residue,
+                position,
+            )
+            mutations: list[MutationInput] = []
+            job_ids: list[str] = []
+            for to_residue in CANONICAL_AA:
+                if to_residue == from_residue:
+                    continue
+                mutation = MutationInput(
+                    chain_id=self.config.mutable_chain_id,
+                    from_residue=from_residue,
+                    position_1based=position,
+                    to_residue=to_residue,
+                )
+                mutations.append(mutation)
+                job_ids.append(_job_id(panel_name, to_residue))
+            panels.append(
+                MutationPanel(
+                    panel_id=panel_name,
+                    chain_id=self.config.mutable_chain_id,
+                    position_1based=position,
+                    from_residue=from_residue,
+                    job_ids=tuple(job_ids),
+                    mutations=tuple(mutations),
+                )
+            )
+        return wt_query_id, wt_query, panels
+
+    def _write_wt_query_json(self, wt_query_id: str, wt_query: Query) -> Path:
+        wt_dir = self._wt_dir()
+        wt_dir.mkdir(parents=True, exist_ok=True)
+        path = wt_dir / "query.json"
+        if not path.exists():
+            query_set = InferenceQuerySet(queries={wt_query_id: wt_query})
+            path.write_text(query_set.model_dump_json(indent=2), encoding="utf-8")
+        return path
+
+    def _write_panel_query_json(self, base_query: Query, panel: MutationPanel) -> Path:
+        panel_dir = self._panel_dir(panel.panel_id)
+        panel_dir.mkdir(parents=True, exist_ok=True)
+        query_json = panel_dir / "queries.json"
+        if query_json.exists():
+            return query_json
+        queries: dict[str, Query] = {}
+        for job_id, mutation in zip(panel.job_ids, panel.mutations, strict=True):
+            query = _clone_query(base_query)
+            for chain in query.chains:
+                if mutation.chain_id in chain.chain_ids and chain.sequence is not None:
+                    chain.sequence = apply_point_mutation(
+                        chain.sequence,
+                        mutation.position_1based,
+                        mutation.to_residue,
+                        expected_residue=mutation.from_residue,
+                    )
+                    break
+            else:
+                raise ValueError(
+                    f"Could not find mutable chain {mutation.chain_id} for panel {panel.panel_id}"
+                )
+            queries[job_id] = query
+        query_json.write_text(
+            InferenceQuerySet(queries=queries).model_dump_json(indent=2),
+            encoding="utf-8",
+        )
+        return query_json
+
+    def _align_msa(self, query_json: Path, output_dir: Path, label: str) -> Path:
+        output_dir.mkdir(parents=True, exist_ok=True)
+        query_msa_json = output_dir / "query_msa.json"
+        if query_msa_json.exists():
+            self._log(f"[resume] MSA already present for {label}: {query_msa_json}")
+            return query_msa_json
+        command = self._python_cmd_prefix() + [
+            "align-msa-server",
+            "--query_json",
+            str(query_json),
+            "--output_dir",
+            str(output_dir),
+        ]
+        if self.config.msa_computation_settings_yaml is not None:
+            command += [
+                "--msa_computation_settings_yaml",
+                str(self.config.msa_computation_settings_yaml),
+            ]
+        self._run_subprocess(command, f"msa:{label}")
+        if not query_msa_json.exists():
+            raise RuntimeError(f"MSA stage did not produce {query_msa_json}")
+        return query_msa_json
+
+    def _predict(self, query_json: Path, output_dir: Path, label: str) -> Path:
+        output_dir.mkdir(parents=True, exist_ok=True)
+        summary_path = output_dir / "summary.jsonl"
+        if summary_path.exists():
+            self._log(f"[resume] predict summary already present for {label}: {summary_path}")
+            return summary_path
+        command = self._python_cmd_prefix() + [
+            "predict",
+            "--query_json",
+            str(query_json),
+            "--output_dir",
+            str(output_dir),
+            "--use_msa_server",
+            "false",
+            "--use_templates",
+            "false",
+        ]
+        if self.config.runner_yaml is not None:
+            command += ["--runner_yaml", str(self.config.runner_yaml)]
+        if self.config.inference_ckpt_path is not None:
+            command += ["--inference_ckpt_path", str(self.config.inference_ckpt_path)]
+        if self.config.inference_ckpt_name is not None:
+            command += ["--inference_ckpt_name", self.config.inference_ckpt_name]
+        if self.config.num_diffusion_samples is not None:
+            command += ["--num_diffusion_samples", str(self.config.num_diffusion_samples)]
+        if self.config.num_model_seeds is not None:
+            command += ["--num_model_seeds", str(self.config.num_model_seeds)]
+        self._run_subprocess(command, f"predict:{label}")
+        if not summary_path.exists():
+            raise RuntimeError(f"Predict stage did not produce {summary_path}")
+        return summary_path
+
+    def _enqueue_analysis_jobs(self, job_ids: Iterable[str]) -> None:
+        if self.analysis_allowed.is_set():
+            for job_id in job_ids:
+                self.analysis_queue.put(job_id)
+            return
+        with self._deferred_analysis_lock:
+            self._deferred_analysis_job_ids.extend(job_ids)
+
+    def _drain_deferred_analysis_jobs(self) -> None:
+        with self._deferred_analysis_lock:
+            pending = list(self._deferred_analysis_job_ids)
+            self._deferred_analysis_job_ids.clear()
+        for job_id in pending:
+            self.analysis_queue.put(job_id)
+
+    def _ensure_wt(self, wt_query_id: str, wt_query: Query) -> None:
+        self.db.upsert_wt(self.config.target_id, wt_query_id)
+        wt_row = self.db.fetch_wt(self.config.target_id)
+        assert wt_row is not None
+
+        wt_query_json = self._write_wt_query_json(wt_query_id, wt_query)
+        wt_dir = self._wt_dir()
+        msa_dir = wt_dir / "msa"
+        predict_dir = wt_dir / "predict"
+        wt_report_path = self.output_root / "wt_report.json"
+
+        try:
+            if wt_row["msa_status"] != "done" or not (msa_dir / "query_msa.json").exists():
+                self.db.set_wt_stage(
+                    self.config.target_id,
+                    "msa",
+                    "running",
+                    msa_dir=msa_dir,
+                )
+                query_msa_json = self._align_msa(wt_query_json, msa_dir, "wt")
+                self.db.set_wt_stage(
+                    self.config.target_id,
+                    "msa",
+                    "done",
+                    msa_dir=msa_dir,
+                    msa_query_json=query_msa_json,
+                    last_error=None,
+                )
+            else:
+                query_msa_json = msa_dir / "query_msa.json"
+
+            wt_row = self.db.fetch_wt(self.config.target_id)
+            assert wt_row is not None
+            if wt_row["predict_status"] != "done" or not (predict_dir / "summary.jsonl").exists():
+                self.db.set_wt_stage(
+                    self.config.target_id,
+                    "predict",
+                    "running",
+                    predict_dir=predict_dir,
+                )
+                summary_path = self._predict(query_msa_json, predict_dir, "wt")
+                best_rows = _best_summary_rows(summary_path)
+                best = best_rows[wt_query_id]
+                confidence_path = Path(best["aggregated_confidence_path"])
+                structure_path = _infer_structure_path(best["aggregated_confidence_path"])
+                self.db.set_wt_stage(
+                    self.config.target_id,
+                    "predict",
+                    "done",
+                    predict_dir=predict_dir,
+                    structure_path=structure_path,
+                    confidence_path=confidence_path,
+                    last_error=None,
+                )
+
+            wt_row = self.db.fetch_wt(self.config.target_id)
+            assert wt_row is not None
+            if wt_row["analysis_status"] != "done" or not wt_report_path.exists():
+                if wt_row["structure_path"] is None:
+                    raise RuntimeError("WT predict stage is complete but structure_path is missing")
+                case = BenchmarkCase(
+                    case_id=f"{self.config.target_id}_WT",
+                    structure_path=Path(wt_row["structure_path"]),
+                    confidence_path=(
+                        None
+                        if wt_row["confidence_path"] is None
+                        else Path(wt_row["confidence_path"])
+                    ),
+                    notes="WT baseline for panel ddG stand",
+                )
+                self.db.set_wt_stage(self.config.target_id, "analysis", "running")
+                report = self.harness.run_case(case)
+                DdgBenchmarkHarness.write_report(report, wt_report_path)
+                rosetta_score = None
+                for result in report.results:
+                    if result.method == "rosetta_score" and result.score is not None:
+                        rosetta_score = float(result.score)
+                        break
+                self.db.set_wt_stage(
+                    self.config.target_id,
+                    "analysis",
+                    "done",
+                    wt_report_path=wt_report_path,
+                    rosetta_score=rosetta_score,
+                    last_error=None,
+                )
+        except Exception as exc:
+            self.db.set_wt_stage(self.config.target_id, "analysis", "failed", last_error=str(exc))
+            raise
+
+    def _ensure_panel_msa(self, panel: MutationPanel, base_query: Query) -> bool:
+        panel_dir = self._panel_dir(panel.panel_id)
+        query_json = self._write_panel_query_json(base_query, panel)
+        self.db.upsert_panel(self.config.target_id, panel, panel_dir)
+        row = self.db.fetch_panel(panel.panel_id)
+        assert row is not None
+        msa_dir = panel_dir / "msa"
+        try:
+            if row["msa_status"] == "done" and (msa_dir / "query_msa.json").exists():
+                self._log(f"[resume] panel MSA ready {panel.panel_id}")
+                return True
+            self.db.set_panel_stage(panel.panel_id, "msa", "running", last_error=None)
+            query_msa_json = self._align_msa(query_json, msa_dir, panel.panel_id)
+            self.db.set_panel_stage(
+                panel.panel_id,
+                "msa",
+                "done",
+                msa_query_json=query_msa_json,
+                last_error=None,
+            )
+            return True
+        except Exception as exc:
+            self.db.set_panel_stage(panel.panel_id, "msa", "failed", last_error=str(exc))
+            self._log(f"[msa-failed] {panel.panel_id}: {exc}")
+            return False
+
+    def _predict_worker(self) -> None:
+        while True:
+            panel_id = self.predict_queue.get()
+            if panel_id is None:
+                self.predict_queue.task_done()
+                return
+            try:
+                self._ensure_panel_predict(panel_id)
+            finally:
+                self.predict_queue.task_done()
+
+    def _ensure_panel_predict(self, panel_id: str) -> None:
+        panel_row = self.db.fetch_panel(panel_id)
+        if panel_row is None:
+            return
+        panel_dir = self._panel_dir(panel_id)
+        msa_query_json = panel_dir / "msa" / "query_msa.json"
+        predict_dir = panel_dir / "predict"
+        jobs = self.db.list_jobs_for_panel(panel_id)
+        if (
+            panel_row["predict_status"] == "done"
+            and all(
+                job["analysis_status"] == "done"
+                or (
+                    job["structure_path"] is not None
+                    and Path(job["structure_path"]).exists()
+                )
+                for job in jobs
+            )
+        ):
+            self._log(f"[resume] panel predict ready {panel_id}")
+            self._enqueue_analysis_jobs(
+                job["job_id"] for job in jobs if job["analysis_status"] != "done"
+            )
+            return
+        try:
+            self.db.set_panel_stage(panel_id, "predict", "running", last_error=None)
+            summary_path = self._predict(msa_query_json, predict_dir, panel_id)
+            best_rows = _best_summary_rows(summary_path)
+            queued_job_ids: list[str] = []
+            for job in jobs:
+                best = best_rows.get(job["query_id"])
+                if best is None:
+                    self.db.update_job_predict(
+                        job["job_id"],
+                        status="failed",
+                        structure_path=None,
+                        confidence_path=None,
+                        last_error=f"missing_summary_row:{job['query_id']}",
+                    )
+                    continue
+                confidence_path = Path(best["aggregated_confidence_path"])
+                structure_path = _infer_structure_path(best["aggregated_confidence_path"])
+                if structure_path is None:
+                    self.db.update_job_predict(
+                        job["job_id"],
+                        status="failed",
+                        structure_path=None,
+                        confidence_path=confidence_path,
+                        last_error="structure_output_missing",
+                    )
+                    continue
+                self.db.update_job_predict(
+                    job["job_id"],
+                    status="done",
+                    structure_path=structure_path,
+                    confidence_path=confidence_path,
+                    last_error=None,
+                )
+                if job["analysis_status"] != "done":
+                    queued_job_ids.append(str(job["job_id"]))
+            self.db.set_panel_stage(panel_id, "predict", "done", last_error=None)
+            self._enqueue_analysis_jobs(queued_job_ids)
+        except Exception as exc:
+            self.db.set_panel_stage(panel_id, "predict", "failed", last_error=str(exc))
+            self._log(f"[predict-failed] {panel_id}: {exc}")
+
+    def _analysis_worker(self) -> None:
+        self.analysis_allowed.wait()
+        while True:
+            job_id = self.analysis_queue.get()
+            if job_id is None:
+                self.analysis_queue.task_done()
+                return
+            try:
+                self._analyze_job(str(job_id))
+            finally:
+                self.analysis_queue.task_done()
+
+    def _analyze_job(self, job_id: str) -> None:
+        job_row = self.db.fetch_job(job_id)
+        wt_row = self.db.fetch_wt(self.config.target_id)
+        if job_row is None or wt_row is None:
+            return
+        if job_row["analysis_status"] == "done":
+            return
+        if job_row["structure_path"] is None:
+            self.db.update_job_analysis(
+                job_id,
+                status="failed",
+                report_path=None,
+                rosetta_delta_vs_wt=None,
+                last_error="missing_structure_path",
+            )
+            return
+        mutation = MutationInput(
+            chain_id=str(job_row["chain_id"]),
+            from_residue=str(job_row["from_residue"]),
+            position_1based=int(job_row["position_1based"]),
+            to_residue=str(job_row["to_residue"]),
+        )
+        case = BenchmarkCase(
+            case_id=job_id,
+            structure_path=Path(job_row["structure_path"]),
+            confidence_path=(
+                None
+                if job_row["confidence_path"] is None
+                else Path(job_row["confidence_path"])
+            ),
+            mutations=(mutation,),
+            notes=f"Panel stand case for {job_id}",
+        )
+        report_path = self._report_path(job_id)
+        try:
+            report = self.harness.run_case(case)
+            DdgBenchmarkHarness.write_report(report, report_path)
+            self.db.replace_method_results(job_id, [asdict(result) for result in report.results])
+            rosetta_score = None
+            for result in report.results:
+                if result.method == "rosetta_score" and result.score is not None:
+                    rosetta_score = float(result.score)
+                    break
+            wt_rosetta = wt_row["rosetta_score"]
+            rosetta_delta = None
+            if rosetta_score is not None and wt_rosetta is not None:
+                rosetta_delta = rosetta_score - float(wt_rosetta)
+            self.db.update_job_analysis(
+                job_id,
+                status="done",
+                report_path=report_path,
+                rosetta_delta_vs_wt=rosetta_delta,
+                last_error=None,
+            )
+            self._maybe_cleanup_panel(str(job_row["panel_id"]))
+        except Exception as exc:
+            self.db.update_job_analysis(
+                job_id,
+                status="failed",
+                report_path=None,
+                rosetta_delta_vs_wt=None,
+                last_error=str(exc),
+            )
+            self._log(f"[analysis-failed] {job_id}: {exc}")
+
+    def _maybe_cleanup_panel(self, panel_id: str) -> None:
+        if not self.config.cleanup_intermediates:
+            return
+        panel_row = self.db.fetch_panel(panel_id)
+        if panel_row is None:
+            return
+        if panel_row["cleanup_status"] == "done":
+            return
+        if not self.db.panel_is_ready_for_cleanup(panel_id):
+            return
+        panel_dir = self._panel_dir(panel_id)
+        for relative in ("msa", "predict"):
+            path = panel_dir / relative
+            if path.exists():
+                shutil.rmtree(path, ignore_errors=True)
+        self.db.set_panel_stage(panel_id, "cleanup", "done", last_error=None)
+
+    def _write_summary(self) -> Path:
+        payload = {
+            "target_id": self.config.target_id,
+            "mutable_chain_id": self.config.mutable_chain_id,
+            "positions": list(self.config.positions),
+            "summary": self.db.summary(),
+        }
+        path = self.output_root / "summary.json"
+        path.write_text(json.dumps(payload, indent=2, default=_json_default), encoding="utf-8")
+        return path
+
+    def run(self) -> dict[str, Any]:
+        wt_query_id, wt_query, panels = self._build_panels()
+        self._ensure_wt(wt_query_id, wt_query)
+        for panel in panels:
+            self.db.upsert_panel(self.config.target_id, panel, self._panel_dir(panel.panel_id))
+
+        analysis_threads = [
+            threading.Thread(target=self._analysis_worker, daemon=True)
+            for _ in range(max(1, self.config.analysis_workers))
+        ]
+        for thread in analysis_threads:
+            thread.start()
+
+        gpu_thread = threading.Thread(target=self._predict_worker, daemon=True)
+        gpu_thread.start()
+
+        if self.config.msa_panel_workers <= 1:
+            for index, panel in enumerate(panels, start=1):
+                self._log(f"[msa {index}/{len(panels)}] {panel.panel_id}")
+                if self._ensure_panel_msa(panel, wt_query):
+                    self.predict_queue.put(panel.panel_id)
+        else:
+            from concurrent.futures import ThreadPoolExecutor, as_completed
+
+            with ThreadPoolExecutor(max_workers=max(1, self.config.msa_panel_workers)) as executor:
+                futures = {
+                    executor.submit(self._ensure_panel_msa, panel, wt_query): panel
+                    for panel in panels
+                }
+                for future in as_completed(futures):
+                    panel = futures[future]
+                    if future.result():
+                        self.predict_queue.put(panel.panel_id)
+
+        self.predict_queue.put(None)
+        self.analysis_allowed.set()
+        self._drain_deferred_analysis_jobs()
+
+        gpu_thread.join()
+        for _ in analysis_threads:
+            self.analysis_queue.put(None)
+        for thread in analysis_threads:
+            thread.join()
+
+        summary_path = self._write_summary()
+        return {
+            "output_root": str(self.output_root),
+            "state_db": str(self.output_root / "state.sqlite"),
+            "summary_path": str(summary_path),
+            "panel_count": len(panels),
+            "mutant_job_count": sum(len(panel.job_ids) for panel in panels),
+        }

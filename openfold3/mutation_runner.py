@@ -26,7 +26,7 @@ import subprocess
 import sys
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
@@ -42,6 +42,11 @@ from openfold3.projects.of3_all_atom.config.inference_query_format import (
 logger = logging.getLogger(__name__)
 
 CANONICAL_AA = tuple("ACDEFGHIKLMNPQRSTVWY")
+BATCH_GATHER_TIMEOUT_SECONDS = 0.05
+
+
+def _metric_or_default(value: Any, default: float) -> float:
+    return default if value is None else value
 
 
 def _stable_json_dumps(value: Any) -> str:
@@ -145,8 +150,10 @@ class ScreeningJob:
     template_policy: str = "reuse_precomputed"
     output_policy: str = "metrics_only"
     resume: bool = True
+    cache_query_results: bool = True
     num_cpu_workers: int = 4
     max_inflight_queries: int = 4
+    subprocess_batch_size: int = 1
     num_diffusion_samples: int | None = None
     num_model_seeds: int | None = None
     runner_yaml: Path | None = None
@@ -320,12 +327,13 @@ class QueryResultCache:
 class SubprocessOpenFoldBackend:
     def __init__(self, job: ScreeningJob):
         self.job = job
+        self._batch_counter = 0
 
     def _cleanup_query_output_dir(self, output_dir: Path) -> None:
         if output_dir.exists():
             shutil.rmtree(output_dir, ignore_errors=True)
 
-    def _runner_yaml_for_job(self, prepared_job: PreparedMutationJob) -> Path:
+    def _runner_yaml_for_output_dir(self, output_dir: Path) -> Path:
         config = {}
         if self.job.runner_yaml is not None:
             config = (
@@ -345,10 +353,83 @@ class SubprocessOpenFoldBackend:
         experiment_settings = config.setdefault("experiment_settings", {})
         experiment_settings.setdefault("skip_existing", self.job.resume)
 
-        yaml_path = prepared_job.output_dir / "runner.override.yml"
+        yaml_path = output_dir / "runner.override.yml"
         yaml_path.parent.mkdir(parents=True, exist_ok=True)
         yaml_path.write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
         return yaml_path
+
+    def _build_predict_cmd(
+        self,
+        query_json: Path,
+        output_dir: Path,
+        runner_yaml: Path,
+    ) -> list[str]:
+        cmd = [
+            sys.executable,
+            "-m",
+            "openfold3.run_openfold",
+            "predict",
+            "--query_json",
+            str(query_json),
+            "--output_dir",
+            str(output_dir),
+            "--use_msa_server",
+            str(self.job.use_msa_server).lower(),
+            "--use_templates",
+            str(self.job.use_templates).lower(),
+            "--runner_yaml",
+            str(runner_yaml),
+        ]
+
+        if self.job.num_diffusion_samples is not None:
+            cmd += ["--num_diffusion_samples", str(self.job.num_diffusion_samples)]
+        if self.job.num_model_seeds is not None:
+            cmd += ["--num_model_seeds", str(self.job.num_model_seeds)]
+        if self.job.inference_ckpt_path is not None:
+            cmd += ["--inference_ckpt_path", str(self.job.inference_ckpt_path)]
+        if self.job.inference_ckpt_name is not None:
+            cmd += ["--inference_ckpt_name", self.job.inference_ckpt_name]
+        return cmd
+
+    def _run_predict(self, cmd: list[str], log_label: str) -> float:
+        start = time.perf_counter()
+        process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+        )
+        assert process.stdout is not None
+        for line in process.stdout:
+            logger.info("[predict:%s] %s", log_label, line.rstrip())
+        return_code = process.wait()
+        if return_code != 0:
+            raise subprocess.CalledProcessError(return_code, cmd)
+        return time.perf_counter() - start
+
+    @staticmethod
+    def _merge_payloads(prepared_jobs: list[PreparedMutationJob]) -> dict[str, Any]:
+        merged_payload: dict[str, Any] = {"queries": {}}
+        for prepared_job in prepared_jobs:
+            payload = json.loads(prepared_job.payload_path.read_text(encoding="utf-8"))
+            if "seeds" in payload and "seeds" not in merged_payload:
+                merged_payload["seeds"] = payload["seeds"]
+            merged_payload["queries"].update(payload.get("queries", {}))
+        return merged_payload
+
+    def _write_batch_payload(
+        self,
+        prepared_jobs: list[PreparedMutationJob],
+        batch_output_dir: Path,
+    ) -> Path:
+        payload_path = batch_output_dir / "batched_queries.json"
+        payload_path.parent.mkdir(parents=True, exist_ok=True)
+        payload_path.write_text(
+            json.dumps(self._merge_payloads(prepared_jobs), indent=2),
+            encoding="utf-8",
+        )
+        return payload_path
 
     def _parse_best_summary_row(
         self, summary_path: Path, query_id: str
@@ -366,74 +447,25 @@ class SubprocessOpenFoldBackend:
         def sort_key(item: dict[str, Any]):
             return (
                 item.get("sample_ranking_score") is not None,
-                item.get("sample_ranking_score") or float("-inf"),
-                item.get("iptm") or float("-inf"),
-                item.get("ptm") or float("-inf"),
-                item.get("avg_plddt") or float("-inf"),
-                -(item.get("gpde") or float("inf")),
+                _metric_or_default(item.get("sample_ranking_score"), float("-inf")),
+                _metric_or_default(item.get("iptm"), float("-inf")),
+                _metric_or_default(item.get("ptm"), float("-inf")),
+                _metric_or_default(item.get("avg_plddt"), float("-inf")),
+                -_metric_or_default(item.get("gpde"), float("inf")),
             )
 
         return max(rows, key=sort_key)
 
-    def run(self, prepared_job: PreparedMutationJob) -> ScreeningResultRow:
-        start = time.perf_counter()
-        runner_yaml = self._runner_yaml_for_job(prepared_job)
-        cmd = [
-            sys.executable,
-            "-m",
-            "openfold3.run_openfold",
-            "predict",
-            "--query_json",
-            str(prepared_job.payload_path),
-            "--output_dir",
-            str(prepared_job.output_dir),
-            "--use_msa_server",
-            str(self.job.use_msa_server).lower(),
-            "--use_templates",
-            str(self.job.use_templates).lower(),
-            "--runner_yaml",
-            str(runner_yaml),
-        ]
-
-        if self.job.num_diffusion_samples is not None:
-            cmd += ["--num_diffusion_samples", str(self.job.num_diffusion_samples)]
-        if self.job.num_model_seeds is not None:
-            cmd += ["--num_model_seeds", str(self.job.num_model_seeds)]
-        if self.job.inference_ckpt_path is not None:
-            cmd += ["--inference_ckpt_path", str(self.job.inference_ckpt_path)]
-        if self.job.inference_ckpt_name is not None:
-            cmd += ["--inference_ckpt_name", self.job.inference_ckpt_name]
-
-        logger.info(
-            "Launching query %s with output_dir=%s",
-            prepared_job.query_id,
-            prepared_job.output_dir,
-        )
-        process = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            bufsize=1,
-        )
-        assert process.stdout is not None
-        for line in process.stdout:
-            logger.info("[predict:%s] %s", prepared_job.query_id, line.rstrip())
-        return_code = process.wait()
-        if return_code != 0:
-            raise subprocess.CalledProcessError(return_code, cmd)
-        gpu_seconds = time.perf_counter() - start
-
-        summary_path = prepared_job.output_dir / "summary.jsonl"
-        best = self._parse_best_summary_row(summary_path, prepared_job.query_id)
-
-        aggregated_confidence_path = best.get("aggregated_confidence_path")
-        query_output_cleaned = False
-        if self.job.cleanup_query_outputs:
-            aggregated_confidence_path = None
-            self._cleanup_query_output_dir(prepared_job.output_dir)
-            query_output_cleaned = True
-
+    def _row_from_best(
+        self,
+        prepared_job: PreparedMutationJob,
+        best: dict[str, Any],
+        *,
+        gpu_seconds: float,
+        output_dir: Path,
+        query_output_cleaned: bool,
+        aggregated_confidence_path: str | None,
+    ) -> ScreeningResultRow:
         return ScreeningResultRow(
             mutation_id=prepared_job.mutation_id,
             query_id=prepared_job.query_id,
@@ -452,7 +484,7 @@ class SubprocessOpenFoldBackend:
             cpu_prep_seconds=prepared_job.cpu_prep_seconds,
             gpu_inference_seconds=gpu_seconds,
             total_seconds=prepared_job.cpu_prep_seconds + gpu_seconds,
-            output_dir=str(prepared_job.output_dir),
+            output_dir=str(output_dir),
             aggregated_confidence_path=aggregated_confidence_path,
             mutation_spec=(
                 asdict(prepared_job.mutation_spec)
@@ -462,6 +494,73 @@ class SubprocessOpenFoldBackend:
             derived_interface_metrics=best.get("derived_interface_metrics", {}),
             query_output_cleaned=query_output_cleaned,
         )
+
+    def run(self, prepared_job: PreparedMutationJob) -> ScreeningResultRow:
+        return self.run_batch([prepared_job])[0]
+
+    def run_batch(
+        self, prepared_jobs: list[PreparedMutationJob]
+    ) -> list[ScreeningResultRow]:
+        if not prepared_jobs:
+            return []
+
+        if len(prepared_jobs) == 1:
+            output_dir = prepared_jobs[0].output_dir
+            payload_path = prepared_jobs[0].payload_path
+            log_label = prepared_jobs[0].query_id
+            query_output_dirs = {
+                prepared_jobs[0].query_id: prepared_jobs[0].output_dir,
+            }
+        else:
+            self._batch_counter += 1
+            output_dir = (
+                self.job.output_dir
+                / "batched_runs"
+                / f"batch_{self._batch_counter:04d}"
+            )
+            payload_path = self._write_batch_payload(prepared_jobs, output_dir)
+            log_label = ",".join(
+                prepared_job.query_id for prepared_job in prepared_jobs
+            )
+            query_output_dirs = {
+                prepared_job.query_id: output_dir / prepared_job.query_id
+                for prepared_job in prepared_jobs
+            }
+
+        runner_yaml = self._runner_yaml_for_output_dir(output_dir)
+        cmd = self._build_predict_cmd(payload_path, output_dir, runner_yaml)
+        logger.info(
+            "Launching %s query(s): %s",
+            len(prepared_jobs),
+            ", ".join(prepared_job.query_id for prepared_job in prepared_jobs),
+        )
+        batch_gpu_seconds = self._run_predict(cmd, log_label)
+        gpu_seconds_per_query = batch_gpu_seconds / len(prepared_jobs)
+        summary_path = output_dir / "summary.jsonl"
+
+        rows: list[ScreeningResultRow] = []
+        for prepared_job in prepared_jobs:
+            best = self._parse_best_summary_row(summary_path, prepared_job.query_id)
+            aggregated_confidence_path = best.get("aggregated_confidence_path")
+            query_output_cleaned = False
+            if self.job.cleanup_query_outputs:
+                aggregated_confidence_path = None
+                query_output_cleaned = True
+            rows.append(
+                self._row_from_best(
+                    prepared_job,
+                    best,
+                    gpu_seconds=gpu_seconds_per_query,
+                    output_dir=query_output_dirs[prepared_job.query_id],
+                    query_output_cleaned=query_output_cleaned,
+                    aggregated_confidence_path=aggregated_confidence_path,
+                )
+            )
+
+        if self.job.cleanup_query_outputs:
+            self._cleanup_query_output_dir(output_dir)
+
+        return rows
 
 
 class MutationScreeningRunner:
@@ -600,7 +699,7 @@ class MutationScreeningRunner:
         job: ScreeningJob,
         mutation_spec: MutationSpec | None,
         sequence_cache: SequenceArtifactCache,
-        result_cache: QueryResultCache,
+        result_cache: QueryResultCache | None,
         mutable_chain_ids: set[str],
     ) -> PreparedMutationJob | ScreeningResultRow:
         started = time.perf_counter()
@@ -616,7 +715,7 @@ class MutationScreeningRunner:
         )
         query_hash = self._query_hash(query, job)
 
-        if job.resume:
+        if job.resume and result_cache is not None:
             cached = result_cache.load(query_hash)
             if cached is not None:
                 cached.cache_hit = True
@@ -646,6 +745,51 @@ class MutationScreeningRunner:
                 entries = entries + [None]
         return entries
 
+    def _run_prepared_jobs(
+        self,
+        job: ScreeningJob,
+        backend: PredictBackend,
+        prepared_jobs: list[PreparedMutationJob],
+        result_cache: QueryResultCache | None,
+        total_entries: int,
+        rows: list[ScreeningResultRow],
+    ) -> None:
+        if not prepared_jobs:
+            return
+
+        self._check_free_disk_or_raise(job.output_dir, job.min_free_disk_gb)
+        batch_query_ids = ", ".join(
+            prepared_job.query_id for prepared_job in prepared_jobs
+        )
+        logger.info(
+            "Launching batch of %s query(s): %s",
+            len(prepared_jobs),
+            batch_query_ids,
+        )
+
+        batch_runner = getattr(backend, "run_batch", None)
+        if callable(batch_runner):
+            batch_rows = batch_runner(prepared_jobs)
+        else:
+            batch_rows = [backend.run(prepared_job) for prepared_job in prepared_jobs]
+
+        for row in batch_rows:
+            if result_cache is not None:
+                result_cache.store(row)
+            self._check_free_disk_or_raise(job.output_dir, job.min_free_disk_gb)
+            logger.info(
+                "Completed %s/%s: %s in %.2fs "
+                "(cache_hit=%s, sequence_cache_hits=%s, cleaned=%s)",
+                len(rows) + 1,
+                total_entries,
+                row.query_id,
+                row.total_seconds,
+                row.cache_hit,
+                row.sequence_cache_hits,
+                row.query_output_cleaned,
+            )
+            rows.append(row)
+
     def run(self, job: ScreeningJob) -> list[ScreeningResultRow]:
         job.output_dir.mkdir(parents=True, exist_ok=True)
         job.cache_dir.mkdir(parents=True, exist_ok=True)
@@ -659,81 +803,97 @@ class MutationScreeningRunner:
         self._check_free_disk_or_raise(job.output_dir, job.min_free_disk_gb)
 
         sequence_cache = SequenceArtifactCache(job.cache_dir / "sequence")
-        result_cache = QueryResultCache(job.cache_dir / "results")
-        mutable_chain_ids = self._mutable_chain_ids_from_query(job.base_query, job.mutations)
+        result_cache = (
+            QueryResultCache(job.cache_dir / "results")
+            if job.cache_query_results
+            else None
+        )
+        mutable_chain_ids = self._mutable_chain_ids_from_query(
+            job.base_query, job.mutations
+        )
         self._register_base_chain_cache(
             job.base_query, sequence_cache, mutable_chain_ids
         )
 
         backend = self.backend or SubprocessOpenFoldBackend(job)
-        prepared_queue: queue.Queue[PreparedMutationJob | ScreeningResultRow | None] = (
+        prepared_queue: queue.Queue[
+            PreparedMutationJob | ScreeningResultRow | BaseException | None
+        ] = (
             queue.Queue(maxsize=max(1, job.max_inflight_queries))
         )
         entries = self._entries(job)
         total_entries = len(entries)
-        completed_entries = 0
         rows: list[ScreeningResultRow] = []
+        pending_prepared_jobs: list[PreparedMutationJob] = []
+        batch_size = max(1, job.subprocess_batch_size)
+        producer_finished = False
 
         def producer() -> None:
-            with ThreadPoolExecutor(
-                max_workers=max(1, job.num_cpu_workers)
-            ) as executor:
-                futures = [
-                    executor.submit(
-                        self._prepare_single_job,
-                        job,
-                        mutation_spec,
-                        sequence_cache,
-                        result_cache,
-                        mutable_chain_ids,
-                    )
-                    for mutation_spec in entries
-                ]
-                for future in futures:
-                    prepared_queue.put(future.result())
-            prepared_queue.put(None)
+            try:
+                with ThreadPoolExecutor(
+                    max_workers=max(1, job.num_cpu_workers)
+                ) as executor:
+                    futures = [
+                        executor.submit(
+                            self._prepare_single_job,
+                            job,
+                            mutation_spec,
+                            sequence_cache,
+                            result_cache,
+                            mutable_chain_ids,
+                        )
+                        for mutation_spec in entries
+                    ]
+                    for future in as_completed(futures):
+                        prepared_queue.put(future.result())
+            except BaseException as exc:
+                prepared_queue.put(exc)
+            finally:
+                prepared_queue.put(None)
 
         producer_thread = threading.Thread(target=producer, daemon=True)
         producer_thread.start()
 
-        while True:
-            item = prepared_queue.get()
+        def handle_item(
+            item: PreparedMutationJob | ScreeningResultRow | BaseException | None,
+        ) -> None:
+            nonlocal producer_finished
             if item is None:
-                break
-            completed_entries += 1
+                producer_finished = True
+                return
+            if isinstance(item, BaseException):
+                raise item
             if isinstance(item, ScreeningResultRow):
                 logger.info(
-                    "Progress %s/%s: using cached result for %s (query_result_cache_hit=%s)",
-                    completed_entries,
-                    total_entries,
+                    "Using cached result for %s (query_result_cache_hit=%s)",
                     item.query_id,
                     item.query_result_cache_hit,
                 )
                 rows.append(item)
-                continue
+                return
+            pending_prepared_jobs.append(item)
 
-            self._check_free_disk_or_raise(job.output_dir, job.min_free_disk_gb)
-            logger.info(
-                "Progress %s/%s: launching %s",
-                completed_entries,
-                total_entries,
-                item.query_id,
-            )
-            row = backend.run(item)
-            result_cache.store(row)
-            self._check_free_disk_or_raise(job.output_dir, job.min_free_disk_gb)
-            logger.info(
-                "Progress %s/%s: finished %s in %.2fs "
-                "(cache_hit=%s, sequence_cache_hits=%s, cleaned=%s)",
-                completed_entries,
-                total_entries,
-                row.query_id,
-                row.total_seconds,
-                row.cache_hit,
-                row.sequence_cache_hits,
-                row.query_output_cleaned,
-            )
-            rows.append(row)
+        while not producer_finished:
+            handle_item(prepared_queue.get())
+            while not producer_finished and len(pending_prepared_jobs) < batch_size:
+                try:
+                    handle_item(
+                        prepared_queue.get(timeout=BATCH_GATHER_TIMEOUT_SECONDS)
+                    )
+                except queue.Empty:
+                    break
+            if pending_prepared_jobs and (
+                producer_finished or len(pending_prepared_jobs) >= batch_size
+            ):
+                self._run_prepared_jobs(
+                    job,
+                    backend,
+                    list(pending_prepared_jobs),
+                    result_cache,
+                    total_entries,
+                    rows,
+                )
+                pending_prepared_jobs.clear()
 
         producer_thread.join()
         self._write_results(job.output_dir, rows)
@@ -775,6 +935,8 @@ class MutationScreeningRunner:
             "num_mutations": len(job.mutations),
             "include_wt": job.include_wt,
             "run_baseline_first": job.run_baseline_first,
+            "cache_query_results": job.cache_query_results,
+            "subprocess_batch_size": max(1, job.subprocess_batch_size),
             "rows_written": len(rows),
             "results_jsonl": str(job.output_dir / "results.jsonl"),
             "results_csv": str(job.output_dir / "results.csv"),
