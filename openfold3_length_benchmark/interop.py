@@ -44,7 +44,14 @@ def resolve_openfold_repo_dir(base_dir: str | Path | None = None) -> Path:
     )
 
 
-OPENFOLD_REPO_DIR = resolve_openfold_repo_dir()
+def default_openfold_repo_dir() -> Path:
+    try:
+        return resolve_openfold_repo_dir()
+    except FileNotFoundError:
+        return WORKSPACE_ROOT
+
+
+OPENFOLD_REPO_DIR = default_openfold_repo_dir()
 
 
 def ensure_project_paths() -> None:

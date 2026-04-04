@@ -10,7 +10,7 @@ from openfold3_length_benchmark.analysis import (
     select_oracle_row,
     summarize_results,
 )
-from openfold3_length_benchmark.interop import resolve_openfold_repo_dir
+from openfold3_length_benchmark.interop import default_openfold_repo_dir, resolve_openfold_repo_dir
 from openfold3_length_benchmark.plots import write_binned_svg, write_scatter_svg
 
 
@@ -119,3 +119,16 @@ def test_resolve_openfold_repo_dir_supports_embedded_layout(tmp_path: Path) -> N
 
     resolved = resolve_openfold_repo_dir(repo_root)
     assert resolved == repo_root.resolve()
+
+
+def test_default_openfold_repo_dir_falls_back_to_workspace_root(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(
+        "openfold3_length_benchmark.interop.WORKSPACE_ROOT",
+        tmp_path / "workspace",
+    )
+    monkeypatch.setattr(
+        "openfold3_length_benchmark.interop.resolve_openfold_repo_dir",
+        lambda *args, **kwargs: (_ for _ in ()).throw(FileNotFoundError("missing repo")),
+    )
+
+    assert default_openfold_repo_dir() == (tmp_path / "workspace")
