@@ -8,7 +8,43 @@ from pathlib import Path
 WORKSPACE_ROOT = Path(__file__).resolve().parents[1]
 PACKAGE_ROOT = WORKSPACE_ROOT / "openfold3_length_benchmark"
 OPENFOLD_NOTEBOOK_HELPERS = WORKSPACE_ROOT / "helpers"
-OPENFOLD_REPO_DIR = WORKSPACE_ROOT.parent / "openfold-3"
+
+
+def _looks_like_openfold_repo(path: Path) -> bool:
+    return (
+        (path / "openfold3").is_dir()
+        and (
+            (path / "scripts" / "dev" / "benchmark_rmsd_vs_pdb.py").exists()
+            or (path / "pyproject.toml").exists()
+        )
+    )
+
+
+def resolve_openfold_repo_dir(base_dir: str | Path | None = None) -> Path:
+    anchor = Path(base_dir).expanduser().resolve() if base_dir is not None else WORKSPACE_ROOT
+    candidates = [
+        anchor / "openfold-3",
+        anchor.parent / "openfold-3",
+        anchor,
+        anchor.parent,
+    ]
+
+    seen: set[Path] = set()
+    for candidate in candidates:
+        candidate = candidate.resolve()
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        if _looks_like_openfold_repo(candidate):
+            return candidate
+
+    raise FileNotFoundError(
+        "Could not locate an openfold-3 checkout. "
+        f"Tried: {', '.join(str(path) for path in seen)}"
+    )
+
+
+OPENFOLD_REPO_DIR = resolve_openfold_repo_dir()
 
 
 def ensure_project_paths() -> None:
@@ -30,8 +66,10 @@ def clone_runtime(runtime: RuntimeConfig, **overrides) -> RuntimeConfig:
     return replace(runtime, **overrides)
 
 
-def benchmark_cli_path() -> Path:
-    return OPENFOLD_REPO_DIR / "scripts" / "dev" / "benchmark_rmsd_vs_pdb.py"
+def benchmark_cli_path(base_dir: str | Path | None = None) -> Path:
+    if base_dir is not None:
+        return Path(base_dir).expanduser().resolve() / "scripts" / "dev" / "benchmark_rmsd_vs_pdb.py"
+    return resolve_openfold_repo_dir() / "scripts" / "dev" / "benchmark_rmsd_vs_pdb.py"
 
 
 def default_runs_root() -> Path:

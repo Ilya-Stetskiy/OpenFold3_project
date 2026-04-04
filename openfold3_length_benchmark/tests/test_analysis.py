@@ -10,6 +10,7 @@ from openfold3_length_benchmark.analysis import (
     select_oracle_row,
     summarize_results,
 )
+from openfold3_length_benchmark.interop import resolve_openfold_repo_dir
 from openfold3_length_benchmark.plots import write_binned_svg, write_scatter_svg
 
 
@@ -104,3 +105,17 @@ def test_summary_and_svg_generation(tmp_path: Path) -> None:
     assert binned_path.exists()
     assert "<svg" in scatter_path.read_text(encoding="utf-8")
     assert "<svg" in binned_path.read_text(encoding="utf-8")
+
+
+def test_resolve_openfold_repo_dir_supports_embedded_layout(tmp_path: Path) -> None:
+    repo_root = tmp_path / "OpenFold3_project"
+    openfold_repo = repo_root
+    (openfold_repo / "openfold3").mkdir(parents=True)
+    (openfold_repo / "scripts" / "dev").mkdir(parents=True)
+    (openfold_repo / "scripts" / "dev" / "benchmark_rmsd_vs_pdb.py").write_text(
+        "# stub\n",
+        encoding="utf-8",
+    )
+
+    resolved = resolve_openfold_repo_dir(repo_root)
+    assert resolved == repo_root.resolve()

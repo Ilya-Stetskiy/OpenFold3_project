@@ -94,9 +94,11 @@ def _run_rmsd_benchmark(
 ) -> Path:
     output_dir.mkdir(parents=True, exist_ok=True)
     log_path = output_dir / "benchmark_rmsd.log"
+    openfold_repo_dir = Path(runtime.openfold_repo_dir).expanduser().resolve()
+    cli_path = benchmark_cli_path(openfold_repo_dir)
     cmd = [
         str(runtime.openfold_python),
-        str(benchmark_cli_path()),
+        str(cli_path),
         "--pred-root",
         str(pred_root),
         "--ref-dir",
@@ -112,7 +114,7 @@ def _run_rmsd_benchmark(
     with log_path.open("w", encoding="utf-8") as handle:
         process = subprocess.Popen(
             cmd,
-            cwd=benchmark_cli_path().parent.parent.parent,
+            cwd=openfold_repo_dir,
             env=env,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
