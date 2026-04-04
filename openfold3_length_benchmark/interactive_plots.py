@@ -3,38 +3,22 @@ from __future__ import annotations
 from typing import Any
 
 
-def _load_display_dependencies() -> tuple[Any, Any]:
+def _load_display_dependencies() -> tuple[Any, Any, Any]:
     try:
-        from IPython.display import Markdown, display
+        from IPython.display import HTML, Markdown, display
     except Exception as exc:
         raise RuntimeError(
             "Interactive notebook plots require IPython in the kernel environment."
         ) from exc
-    return Markdown, display
-
-
-def _pick_plotly_renderer(pio: Any) -> str | None:
-    preferred_renderers = (
-        "plotly_mimetype",
-        "jupyterlab",
-        "notebook_connected",
-        "notebook",
-        "iframe_connected",
-        "iframe",
-    )
-    available = set(pio.renderers)
-    for name in preferred_renderers:
-        if name in available:
-            return name
-    return None
+    return HTML, Markdown, display
 
 
 def display_interactive_scatter(result) -> object | None:
-    Markdown, display = _load_display_dependencies()
+    HTML, Markdown, display = _load_display_dependencies()
 
     try:
         import plotly.graph_objects as go
-        import plotly.io as pio
+        from plotly.offline import plot as plotly_plot
     except Exception:
         display(
             Markdown(
@@ -161,18 +145,23 @@ def display_interactive_scatter(result) -> object | None:
         legend={"orientation": "h", "yanchor": "bottom", "y": 1.02, "x": 0.0},
     )
     fig.update_traces(cliponaxis=False)
-
-    renderer = _pick_plotly_renderer(pio)
-    if renderer is not None:
-        pio.renderers.default = renderer
-
     try:
-        fig.show(renderer=renderer)
+        html = plotly_plot(
+            fig,
+            include_plotlyjs="cdn",
+            output_type="div",
+            config={
+                "responsive": True,
+                "displaylogo": False,
+                "toImageButtonOptions": {"format": "svg"},
+            },
+        )
+        display(HTML(html))
     except Exception as exc:
         display(
             Markdown(
                 "Interactive Plotly scatter could not be rendered in this notebook frontend. "
-                f"Falling back to SVG. Renderer: `{renderer or 'default'}`. Error: `{exc}`"
+                f"Falling back to SVG. Error: `{exc}`"
             )
         )
         return None
