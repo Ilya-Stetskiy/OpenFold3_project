@@ -53,17 +53,25 @@ def test_run_length_benchmark_writes_outputs_and_keeps_partial_failures(
             output_dir=output_dir,
         )
 
-    def fake_run_rmsd_benchmark(*, output_dir, **kwargs):
+    def fake_run_rmsd_benchmark(*, output_dir, atom_set, **kwargs):
         output_dir.mkdir(parents=True, exist_ok=True)
+        if atom_set == "ca":
+            row_a_rmsd = 1.4
+            row_b_rmsd = 1.1
+            matched_count = 97
+        else:
+            row_a_rmsd = 1.9
+            row_b_rmsd = 1.3
+            matched_count = 388
         row_a = {
             "query": "2CRB",
             "sample": "sample_1",
             "rmsd_before_superposition": 2.8,
-            "rmsd_after_superposition": 1.4,
+            "rmsd_after_superposition": row_a_rmsd,
             "coverage": {
-                "matched_atom_count": 97,
-                "pred_filtered_atom_count": 97,
-                "ref_filtered_atom_count": 97,
+                "matched_atom_count": matched_count,
+                "pred_filtered_atom_count": matched_count,
+                "ref_filtered_atom_count": matched_count,
             },
             "aggregated_confidence": {
                 "avg_plddt": 88.0,
@@ -74,11 +82,11 @@ def test_run_length_benchmark_writes_outputs_and_keeps_partial_failures(
             "query": "2CRB",
             "sample": "sample_2",
             "rmsd_before_superposition": 2.1,
-            "rmsd_after_superposition": 1.1,
+            "rmsd_after_superposition": row_b_rmsd,
             "coverage": {
-                "matched_atom_count": 97,
-                "pred_filtered_atom_count": 97,
-                "ref_filtered_atom_count": 97,
+                "matched_atom_count": matched_count,
+                "pred_filtered_atom_count": matched_count,
+                "ref_filtered_atom_count": matched_count,
             },
             "aggregated_confidence": {
                 "avg_plddt": 82.0,
@@ -127,7 +135,11 @@ def test_run_length_benchmark_writes_outputs_and_keeps_partial_failures(
     rows = result.results_df.set_index("pdb_id")
     assert rows.loc["2CRB", "status"] == "ok"
     assert rows.loc["2CRB", "model_selected_rmsd"] == 1.4
+    assert rows.loc["2CRB", "model_selected_rmsd_ca"] == 1.4
+    assert rows.loc["2CRB", "model_selected_rmsd_backbone"] == 1.9
     assert rows.loc["2CRB", "oracle_best_rmsd"] == 1.1
+    assert rows.loc["2CRB", "oracle_best_rmsd_ca"] == 1.1
+    assert rows.loc["2CRB", "oracle_best_rmsd_backbone"] == 1.3
     assert rows.loc["4ZEY", "status"] == "failed"
     assert "Synthetic composition failure" in rows.loc["4ZEY", "failure_reason"]
 

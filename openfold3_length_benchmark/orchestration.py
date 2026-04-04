@@ -40,8 +40,14 @@ RESULT_COLUMNS = [
     "chain_count",
     "chain_lengths",
     "matched_atom_count",
+    "matched_atom_count_ca",
+    "matched_atom_count_backbone",
     "model_selected_rmsd",
+    "model_selected_rmsd_ca",
+    "model_selected_rmsd_backbone",
     "oracle_best_rmsd",
+    "oracle_best_rmsd_ca",
+    "oracle_best_rmsd_backbone",
     "avg_plddt",
     "sample_ranking_score",
     "reference_path",
@@ -52,8 +58,9 @@ RESULT_COLUMNS = [
     "rmsd_output_dir",
     "model_selected_sample",
     "oracle_sample",
+    "oracle_sample_ca",
+    "oracle_sample_backbone",
 ]
-
 
 def _slug_timestamp(prefix: str) -> str:
     safe_prefix = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in prefix).strip("_")
@@ -222,8 +229,14 @@ def _failure_row(
         "chain_count": composition.chain_count,
         "chain_lengths": _format_chain_lengths(composition),
         "matched_atom_count": None,
+        "matched_atom_count_ca": None,
+        "matched_atom_count_backbone": None,
         "model_selected_rmsd": None,
+        "model_selected_rmsd_ca": None,
+        "model_selected_rmsd_backbone": None,
         "oracle_best_rmsd": None,
+        "oracle_best_rmsd_ca": None,
+        "oracle_best_rmsd_backbone": None,
         "avg_plddt": None,
         "sample_ranking_score": None,
         "reference_path": None if reference_path is None else str(reference_path),
@@ -234,18 +247,72 @@ def _failure_row(
         "rmsd_output_dir": None if rmsd_output_dir is None else str(rmsd_output_dir),
         "model_selected_sample": None,
         "oracle_sample": None,
+        "oracle_sample_ca": None,
+        "oracle_sample_backbone": None,
     }
+
+
+def _normalize_atom_sets(atom_set: str | Iterable[str]) -> tuple[str, ...]:
+    if isinstance(atom_set, str):
+        requested = [atom_set]
+    else:
+        requested = list(atom_set)
+    normalized: list[str] = []
+    for value in requested:
+        name = str(value).strip().lower()
+        if not name:
+            continue
+        if name not in {"ca", "backbone", "all"}:
+            raise ValueError(f"Unsupported atom_set: {value!r}")
+        if name not in normalized:
+            normalized.append(name)
+    if not normalized:
+        raise ValueError("At least one atom_set must be provided")
+    if "ca" in normalized:
+        normalized = ["ca"] + [
+            name for name in normalized if name != "ca"
+        ]
+    return tuple(normalized)
+
+
+def _select_selected_sample_name(rmsd_df: pd.DataFrame) -> str | None:
+    if rmsd_df.empty:
+        return None
+    ordered = rmsd_df.copy()
+    ordered = ordered.assign(
+        _ranking_missing=ordered["sample_ranking_score"].isna().astype(int),
+        _plddt_missing=ordered["avg_plddt"].isna().astype(int),
+    ).sort_values(
+        by=[
+            "_ranking_missing",
+            "sample_ranking_score",
+            "_plddt_missing",
+            "avg_plddt",
+            "sample",
+        ],
+        ascending=[True, False, True, False, True],
+    )
+    if ordered.empty:
+        return None
+    return str(ordered.iloc[0]["sample"])
+
+
+def _metric_value(metric_rows: dict[str, dict[str, Any]], atom_set: str, key: str) -> Any:
+    row = metric_rows.get(atom_set) or {}
+    return row.get(key)
 
 
 def _success_row(
     composition: EntryComposition,
     *,
+    primary_atom_set: str,
     reference_path: Path,
     submitted_query_path: Path,
     prediction_result,
-    rmsd_output_dir: Path,
-    selected_row: dict[str, Any],
-    oracle_row: dict[str, Any],
+    rmsd_output_dir: str | Path,
+    selected_sample_name: str,
+    selected_rows_by_metric: dict[str, dict[str, Any]],
+    oracle_rows_by_metric: dict[str, dict[str, Any]],
 ) -> dict[str, Any]:
     return {
         "pdb_id": composition.pdb_id,
@@ -255,19 +322,27 @@ def _success_row(
         "total_protein_length": composition.total_protein_length,
         "chain_count": composition.chain_count,
         "chain_lengths": _format_chain_lengths(composition),
-        "matched_atom_count": selected_row.get("matched_atom_count"),
-        "model_selected_rmsd": selected_row.get("rmsd_after_superposition"),
-        "oracle_best_rmsd": oracle_row.get("rmsd_after_superposition"),
-        "avg_plddt": selected_row.get("avg_plddt"),
-        "sample_ranking_score": selected_row.get("sample_ranking_score"),
+        "matched_atom_count": _metric_value(selected_rows_by_metric, primary_atom_set, "matched_atom_count"),
+        "matched_atom_count_ca": _metric_value(selected_rows_by_metric, "ca", "matched_atom_count"),
+        "matched_atom_count_backbone": _metric_value(selected_rows_by_metric, "backbone", "matched_atom_count"),
+        "model_selected_rmsd": _metric_value(selected_rows_by_metric, primary_atom_set, "rmsd_after_superposition"),
+        "model_selected_rmsd_ca": _metric_value(selected_rows_by_metric, "ca", "rmsd_after_superposition"),
+        "model_selected_rmsd_backbone": _metric_value(selected_rows_by_metric, "backbone", "rmsd_after_superposition"),
+        "oracle_best_rmsd": _metric_value(oracle_rows_by_metric, primary_atom_set, "rmsd_after_superposition"),
+        "oracle_best_rmsd_ca": _metric_value(oracle_rows_by_metric, "ca", "rmsd_after_superposition"),
+        "oracle_best_rmsd_backbone": _metric_value(oracle_rows_by_metric, "backbone", "rmsd_after_superposition"),
+        "avg_plddt": _metric_value(selected_rows_by_metric, primary_atom_set, "avg_plddt"),
+        "sample_ranking_score": _metric_value(selected_rows_by_metric, primary_atom_set, "sample_ranking_score"),
         "reference_path": str(reference_path),
         "submitted_query_path": str(submitted_query_path),
         "openfold_query_path": str(prediction_result.query_path),
         "predict_run_dir": str(prediction_result.run_dir),
         "predict_summary_dir": str(prediction_result.summary_dir),
         "rmsd_output_dir": str(rmsd_output_dir),
-        "model_selected_sample": selected_row.get("sample"),
-        "oracle_sample": oracle_row.get("sample"),
+        "model_selected_sample": selected_sample_name,
+        "oracle_sample": _metric_value(oracle_rows_by_metric, primary_atom_set, "sample"),
+        "oracle_sample_ca": _metric_value(oracle_rows_by_metric, "ca", "sample"),
+        "oracle_sample_backbone": _metric_value(oracle_rows_by_metric, "backbone", "sample"),
     }
 
 
@@ -290,10 +365,14 @@ def _sample_points_dataframe(sample_rows: list[dict[str, Any]]) -> pd.DataFrame:
                 "sample",
                 "seed",
                 "rmsd_after_superposition",
+                "rmsd_ca",
+                "rmsd_backbone",
                 "sample_ranking_score",
                 "avg_plddt",
                 "is_selected_model",
                 "is_oracle_best",
+                "is_oracle_best_ca",
+                "is_oracle_best_backbone",
             ]
         )
     return pd.DataFrame(sample_rows).sort_values(
@@ -306,7 +385,7 @@ def run_length_benchmark(
     runtime: RuntimeConfig,
     pdb_ids: str | Iterable[str],
     *,
-    atom_set: str = "ca",
+    atom_set: str | Iterable[str] = ("ca", "backbone"),
     use_msa_server: bool = True,
     num_diffusion_samples: int = 1,
     num_model_seeds: int = 1,
@@ -316,6 +395,8 @@ def run_length_benchmark(
     max_entries: int | None = None,
     cache_dir: str | Path | None = None,
 ) -> BenchmarkRunResult:
+    atom_sets = _normalize_atom_sets(atom_set)
+    primary_atom_set = atom_sets[0]
     requested_ids = parse_pdb_ids(pdb_ids, max_entries=max_entries)
     compositions = collect_entry_compositions(
         requested_ids,
@@ -410,46 +491,85 @@ def run_length_benchmark(
                     },
                 )
 
-            rmsd_output_dir = _run_rmsd_benchmark(
-                runtime=batch_runtime,
-                pred_root=prediction_result.output_dir,
-                ref_dir=refs_dir,
-                output_dir=rmsd_root / composition.pdb_id,
-                atom_set=atom_set,
-            )
+            rmsd_output_dirs: dict[str, Path] = {}
+            rmsd_frames: dict[str, pd.DataFrame] = {}
+            for metric_name in atom_sets:
+                metric_output_dir = _run_rmsd_benchmark(
+                    runtime=batch_runtime,
+                    pred_root=prediction_result.output_dir,
+                    ref_dir=refs_dir,
+                    output_dir=rmsd_root / composition.pdb_id / metric_name,
+                    atom_set=metric_name,
+                )
+                rmsd_output_dirs[metric_name] = metric_output_dir
+                rmsd_rows = load_jsonl(metric_output_dir / "rmsd_rows.jsonl")
+                rmsd_frames[metric_name] = rmsd_rows_to_dataframe(rmsd_rows)
 
-            rmsd_rows = load_jsonl(rmsd_output_dir / "rmsd_rows.jsonl")
-            rmsd_df = rmsd_rows_to_dataframe(rmsd_rows)
-            selected_row = select_model_row(rmsd_df)
-            oracle_row = select_oracle_row(rmsd_df)
-            if selected_row is None or oracle_row is None:
+            primary_df = rmsd_frames[atom_sets[0]]
+            selected_sample_name = _select_selected_sample_name(primary_df)
+            if selected_sample_name is None:
                 raise ValueError(f"No RMSD rows were produced for {composition.pdb_id}")
 
-            for sample_row in rmsd_df.to_dict(orient="records"):
-                sample_rows.append(
-                    {
-                        "pdb_id": composition.pdb_id,
-                        "chain_group": _chain_group(composition.chain_count),
-                        "total_protein_length": composition.total_protein_length,
-                        "sample": sample_row.get("sample"),
-                        "seed": sample_row.get("seed"),
-                        "rmsd_after_superposition": sample_row.get("rmsd_after_superposition"),
-                        "sample_ranking_score": sample_row.get("sample_ranking_score"),
-                        "avg_plddt": sample_row.get("avg_plddt"),
-                        "is_selected_model": sample_row.get("sample") == selected_row.get("sample"),
-                        "is_oracle_best": sample_row.get("sample") == oracle_row.get("sample"),
-                    }
+            selected_rows_by_metric: dict[str, dict[str, Any]] = {}
+            oracle_rows_by_metric: dict[str, dict[str, Any]] = {}
+            merged_sample_rows: dict[str, dict[str, Any]] = {}
+            for metric_name, rmsd_df in rmsd_frames.items():
+                oracle_row = select_oracle_row(rmsd_df)
+                if oracle_row is None:
+                    raise ValueError(
+                        f"No RMSD rows were produced for {composition.pdb_id} / {metric_name}"
+                    )
+                oracle_rows_by_metric[metric_name] = oracle_row
+
+                selected_matches = rmsd_df[rmsd_df["sample"] == selected_sample_name]
+                if selected_matches.empty:
+                    raise ValueError(
+                        f"Selected sample {selected_sample_name} is missing for {composition.pdb_id} / {metric_name}"
+                    )
+                selected_rows_by_metric[metric_name] = selected_matches.iloc[0].to_dict()
+
+                for sample_row in rmsd_df.to_dict(orient="records"):
+                    sample_name = str(sample_row.get("sample"))
+                    merged = merged_sample_rows.setdefault(
+                        sample_name,
+                        {
+                            "pdb_id": composition.pdb_id,
+                            "chain_group": _chain_group(composition.chain_count),
+                            "total_protein_length": composition.total_protein_length,
+                            "sample": sample_name,
+                            "seed": sample_row.get("seed"),
+                            "sample_ranking_score": sample_row.get("sample_ranking_score"),
+                            "avg_plddt": sample_row.get("avg_plddt"),
+                        },
+                    )
+                    merged[f"rmsd_{metric_name}"] = sample_row.get("rmsd_after_superposition")
+                    merged[f"matched_atom_count_{metric_name}"] = sample_row.get("matched_atom_count")
+
+            for sample_name, merged in merged_sample_rows.items():
+                merged["rmsd_after_superposition"] = merged.get(f"rmsd_{primary_atom_set}")
+                merged["is_selected_model"] = sample_name == selected_sample_name
+                merged["is_oracle_best"] = sample_name == _metric_value(
+                    oracle_rows_by_metric, primary_atom_set, "sample"
                 )
+                merged["is_oracle_best_ca"] = sample_name == _metric_value(
+                    oracle_rows_by_metric, "ca", "sample"
+                )
+                merged["is_oracle_best_backbone"] = sample_name == _metric_value(
+                    oracle_rows_by_metric, "backbone", "sample"
+                )
+                sample_rows.append(merged)
 
             rows.append(
                 _success_row(
                     composition,
+                    primary_atom_set=primary_atom_set,
                     reference_path=reference_path or composition.source_path,  # type: ignore[arg-type]
                     submitted_query_path=submitted_query_path,
                     prediction_result=prediction_result,
-                    rmsd_output_dir=rmsd_output_dir,
-                    selected_row=selected_row,
-                    oracle_row=oracle_row,
+                    rmsd_output_dir=rmsd_root / composition.pdb_id,
+                    selected_sample_name=selected_sample_name,
+                    selected_rows_by_metric=selected_rows_by_metric,
+                    oracle_rows_by_metric=oracle_rows_by_metric,
                 )
             )
         except Exception as exc:
