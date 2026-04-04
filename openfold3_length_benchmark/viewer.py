@@ -133,97 +133,100 @@ def _option_labels(entry: dict[str, object]) -> list[tuple[str, str]]:
     return options
 
 
-def _render_single_view(record: dict[str, object], *, title: str, width: int, height: int) -> str:
-    reference_path = Path(record["reference_path"])
-    model_path = record["model_path"]
-    if model_path is None or not Path(model_path).exists():
-        return (
-            f"<div><h4>{title}</h4><p>Model file is missing.</p>"
-            f"<p>reference: {reference_path}</p></div>"
-        )
-
+def _render_structure_view(
+    structure_path: Path | None,
+    *,
+    title: str,
+    width: int,
+    height: int,
+    color: str,
+    missing_message: str,
+) -> str:
+    if structure_path is None or not structure_path.exists():
+        return f"<div><h4>{title}</h4><p>{missing_message}</p></div>"
     py3Dmol = _load_py3dmol()
     if py3Dmol is None:
         return (
             f"<div><h4>{title}</h4>"
             f"<p>py3Dmol is unavailable.</p>"
-            f"<p>reference: {reference_path}</p>"
-            f"<p>predicted: {model_path}</p></div>"
+            f"<p>structure: {structure_path}</p></div>"
         )
 
     viewer = py3Dmol.view(width=width, height=height)
-    viewer.addModel(reference_path.read_text(encoding="utf-8"), _viewer_format(reference_path))
-    viewer.setStyle({"model": 0}, {"cartoon": {"color": "#94a3b8"}})
-    viewer.addModel(Path(model_path).read_text(encoding="utf-8"), _viewer_format(Path(model_path)))
-    viewer.setStyle({"model": 1}, {"cartoon": {"color": "#0f766e"}})
+    viewer.addModel(
+        structure_path.read_text(encoding="utf-8"),
+        _viewer_format(structure_path),
+    )
+    viewer.setStyle({"model": 0}, {"cartoon": {"color": color}})
     viewer.zoomTo()
     return viewer._make_html()  # noqa: SLF001
 
 
-def _render_compare_html(
+def _render_reference_comparison_html(
     entry: dict[str, object],
     *,
-    left_choice: str | None,
-    right_choice: str | None,
+    model_choice: str | None,
     width: int,
     height: int,
 ) -> str:
-    left_sample = _coerce_choice(
+    selected_sample = _coerce_choice(
         entry,
-        left_choice,
+        model_choice,
         entry["selected_sample"] or entry["oracle_sample"],
     )
-    right_sample = _coerce_choice(
-        entry,
-        right_choice,
-        entry["oracle_sample"] or entry["selected_sample"],
-    )
+    reference_path = Path(entry["reference_path"])
     sample_options = entry["sample_options"]
+    sample = {} if selected_sample is None else sample_options.get(selected_sample, {})
 
-    def build_record(sample_name: str | None) -> dict[str, object]:
-        sample = {} if sample_name is None else sample_options.get(sample_name, {})
-        return {
-            "reference_path": entry["reference_path"],
-            "model_path": sample.get("model_path"),
-        }
-
-    left_html = _render_single_view(
-        build_record(left_sample),
-        title=f"{entry['pdb_id']} left",
+    reference_html = _render_structure_view(
+        reference_path,
+        title=f"{entry['pdb_id']} bank reference",
         width=width,
         height=height,
+        color="#94a3b8",
+        missing_message=f"Reference file is missing: {reference_path}",
     )
-    right_html = _render_single_view(
-        build_record(right_sample),
-        title=f"{entry['pdb_id']} right",
+    prediction_html = _render_structure_view(
+        sample.get("model_path"),
+        title=f"{entry['pdb_id']} predicted model",
         width=width,
         height=height,
+        color="#0f766e",
+        missing_message="Predicted model file is missing.",
     )
 
-    def metrics_block(sample_name: str | None, label: str) -> str:
-        if sample_name is None or sample_name not in sample_options:
-            return f"<div><strong>{label}</strong><br/>missing</div>"
-        sample = sample_options[sample_name]
+    def reference_block() -> str:
         return (
-            f"<div><strong>{label}</strong><br/>"
+            f"<div><strong>Bank reference</strong><br/>"
+            f"PDB: {entry['pdb_id']}<br/>"
+            f"length: {entry['length']}<br/>"
+            f"path: {reference_path}</div>"
+        )
+
+    def prediction_block(sample_name: str | None) -> str:
+        if sample_name is None or sample_name not in sample_options:
+            return "<div><strong>Chosen prediction</strong><br/>missing</div>"
+        return (
+            f"<div><strong>Chosen prediction</strong><br/>"
             f"sample: {sample_name}<br/>"
             f"seed: {sample.get('seed') or 'NA'}<br/>"
             f"rank: {sample.get('sample_ranking_score')}<br/>"
-            f"RMSD: {sample.get('rmsd')}<br/>"
+            f"RMSD vs bank reference: {sample.get('rmsd')}<br/>"
             f"avg pLDDT: {sample.get('avg_plddt')}</div>"
         )
 
     return (
         f"<div>"
         f"<p><strong>{entry['pdb_id']}</strong> length={entry['length']} "
-        f"selected={entry['selected_sample']} oracle-best={entry['oracle_sample']}</p>"
+        f"selected={entry['selected_sample']} oracle-best={entry['oracle_sample']}. "
+        f"Current view compares the chosen prediction to the bank reference.</p>"
         f"<div style='display:flex; gap:16px; align-items:flex-start;'>"
-        f"<div style='flex:1'>{metrics_block(left_sample, 'left')}</div>"
-        f"<div style='flex:1'>{metrics_block(right_sample, 'right')}</div>"
+        f"<div style='flex:1'>{reference_block()}</div>"
+        f"<div style='flex:1'>{prediction_block(selected_sample)}</div>"
         f"</div>"
         f"<div style='display:flex; gap:16px; align-items:flex-start; margin-top:12px;'>"
-        f"<div style='flex:1'>{left_html}</div>"
-        f"<div style='flex:1'>{right_html}</div>"
+        f"<div style='flex:1'>{reference_html}</div>"
+        f"<div style='flex:1'>{prediction_html}</div>"
         f"</div>"
         f"</div>"
     )
@@ -234,6 +237,7 @@ def display_result_structures(
     *,
     pdb_ids: str | Iterable[str] | None = None,
     max_items: int = 3,
+    model_choice: str = "selected",
     width: int = 520,
     height: int = 360,
 ) -> None:
@@ -255,10 +259,9 @@ def display_result_structures(
         return
 
     for entry in entries:
-        html = _render_compare_html(
+        html = _render_reference_comparison_html(
             entry,
-            left_choice="selected",
-            right_choice="oracle-best",
+            model_choice=model_choice,
             width=width,
             height=height,
         )
@@ -294,17 +297,17 @@ def build_structure_browser(
         description="PDB",
         layout=widgets.Layout(width="240px"),
     )
-    left_dropdown = widgets.Dropdown(description="Left", layout=widgets.Layout(width="480px"))
-    right_dropdown = widgets.Dropdown(description="Right", layout=widgets.Layout(width="480px"))
+    model_dropdown = widgets.Dropdown(
+        description="Model",
+        layout=widgets.Layout(width="560px"),
+    )
     output = widgets.Output()
 
     def sync_sample_options(selected_pdb: str) -> None:
         entry = entries[selected_pdb]
         options = _option_labels(entry)
-        left_dropdown.options = options
-        right_dropdown.options = options
-        left_dropdown.value = "selected"
-        right_dropdown.value = "oracle-best"
+        model_dropdown.options = options
+        model_dropdown.value = "selected"
 
     def refresh(*_args) -> None:
         entry = entries[pdb_dropdown.value]
@@ -312,10 +315,9 @@ def build_structure_browser(
             output.clear_output()
             display(
                 HTML(
-                    _render_compare_html(
+                    _render_reference_comparison_html(
                         entry,
-                        left_choice=left_dropdown.value,
-                        right_choice=right_dropdown.value,
+                        model_choice=model_dropdown.value,
                         width=width,
                         height=height,
                     )
@@ -329,8 +331,7 @@ def build_structure_browser(
         refresh()
 
     pdb_dropdown.observe(on_pdb_change, names="value")
-    left_dropdown.observe(refresh, names="value")
-    right_dropdown.observe(refresh, names="value")
+    model_dropdown.observe(refresh, names="value")
 
     sync_sample_options(pdb_dropdown.value)
     refresh()
@@ -338,7 +339,7 @@ def build_structure_browser(
     ui = widgets.VBox(
         [
             widgets.HBox([pdb_dropdown]),
-            widgets.HBox([left_dropdown, right_dropdown]),
+            widgets.HBox([model_dropdown]),
             output,
         ]
     )

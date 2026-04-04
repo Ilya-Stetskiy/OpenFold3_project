@@ -13,16 +13,33 @@ def _load_display_dependencies() -> tuple[Any, Any]:
     return Markdown, display
 
 
+def _pick_plotly_renderer(pio: Any) -> str | None:
+    preferred_renderers = (
+        "plotly_mimetype",
+        "jupyterlab",
+        "notebook_connected",
+        "notebook",
+        "iframe_connected",
+        "iframe",
+    )
+    available = set(pio.renderers)
+    for name in preferred_renderers:
+        if name in available:
+            return name
+    return None
+
+
 def display_interactive_scatter(result) -> object | None:
     Markdown, display = _load_display_dependencies()
 
     try:
         import plotly.graph_objects as go
+        import plotly.io as pio
     except Exception:
         display(
             Markdown(
                 "Interactive Plotly scatter is unavailable because `plotly` is not installed in the notebook kernel. "
-                "Use the SVG fallback below or install `plotly`."
+                "Use the SVG fallback below or install `plotly` in the same kernel environment."
             )
         )
         return None
@@ -144,5 +161,20 @@ def display_interactive_scatter(result) -> object | None:
         legend={"orientation": "h", "yanchor": "bottom", "y": 1.02, "x": 0.0},
     )
     fig.update_traces(cliponaxis=False)
-    fig.show()
+
+    renderer = _pick_plotly_renderer(pio)
+    if renderer is not None:
+        pio.renderers.default = renderer
+
+    try:
+        fig.show(renderer=renderer)
+    except Exception as exc:
+        display(
+            Markdown(
+                "Interactive Plotly scatter could not be rendered in this notebook frontend. "
+                f"Falling back to SVG. Renderer: `{renderer or 'default'}`. Error: `{exc}`"
+            )
+        )
+        return None
+
     return fig
