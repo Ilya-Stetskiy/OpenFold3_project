@@ -21,7 +21,9 @@ def _svg_header(width: int, height: int, title: str) -> list[str]:
         "text { font-family: Arial, sans-serif; fill: #1f2937; }",
         ".axis { stroke: #94a3b8; stroke-width: 1; }",
         ".grid { stroke: #e2e8f0; stroke-width: 1; }",
-        ".point { fill: #0f766e; opacity: 0.85; }",
+        ".sample-point { fill: #94a3b8; opacity: 0.35; }",
+        ".point { fill: #0f766e; opacity: 0.9; }",
+        ".selected-ring { fill: none; stroke: #0f766e; stroke-width: 2; opacity: 0.95; }",
         ".bar { fill: #2563eb; opacity: 0.85; }",
         ".line { stroke: #dc2626; stroke-width: 2; }",
         "</style>",
@@ -51,13 +53,20 @@ def write_scatter_svg(
     output_path: str | Path,
     title: str = "Protein length vs OpenFold3 RMSD",
     regression: dict[str, float] | None = None,
+    sample_points_df: pd.DataFrame | None = None,
 ) -> Path:
-    valid = results_df[
+    selected = results_df[
         (results_df["status"] == "ok")
         & results_df["total_protein_length"].notna()
         & results_df["model_selected_rmsd"].notna()
     ].copy()
-    if valid.empty:
+    samples = pd.DataFrame()
+    if sample_points_df is not None and not sample_points_df.empty:
+        samples = sample_points_df[
+            sample_points_df["total_protein_length"].notna()
+            & sample_points_df["rmsd_after_superposition"].notna()
+        ].copy()
+    if selected.empty and samples.empty:
         return _write_placeholder_svg(
             output_path,
             title=title,
@@ -74,8 +83,18 @@ def write_scatter_svg(
     plot_width = width - left - right
     plot_height = height - top - bottom
 
-    x_values = valid["total_protein_length"].astype(float)
-    y_values = valid["model_selected_rmsd"].astype(float)
+    x_source = (
+        samples["total_protein_length"].astype(float)
+        if not samples.empty
+        else selected["total_protein_length"].astype(float)
+    )
+    y_source = (
+        samples["rmsd_after_superposition"].astype(float)
+        if not samples.empty
+        else selected["model_selected_rmsd"].astype(float)
+    )
+    x_values = x_source
+    y_values = y_source
     x_padding = max((x_values.max() - x_values.min()) * 0.05, 1.0)
     y_padding = max((y_values.max() - y_values.min()) * 0.1, 0.1)
     x_min = float(x_values.min() - x_padding)
@@ -115,7 +134,7 @@ def write_scatter_svg(
         f'<text x="{left + plot_width / 2:.1f}" y="{height - 20}" font-size="14" text-anchor="middle">Total protein length</text>'
     )
     lines.append(
-        f'<text x="24" y="{top + plot_height / 2:.1f}" font-size="14" transform="rotate(-90 24,{top + plot_height / 2:.1f})" text-anchor="middle">Model-selected RMSD</text>'
+        f'<text x="24" y="{top + plot_height / 2:.1f}" font-size="14" transform="rotate(-90 24,{top + plot_height / 2:.1f})" text-anchor="middle">RMSD after superposition</text>'
     )
 
     if regression is not None:
@@ -134,16 +153,54 @@ def write_scatter_svg(
                 f'<line class="line" x1="{px1:.1f}" y1="{py1:.1f}" x2="{px2:.1f}" y2="{py2:.1f}" />'
             )
 
-    show_labels = len(valid) <= 18
-    for row in valid.to_dict(orient="records"):
+    if not samples.empty:
+        for row in samples.to_dict(orient="records"):
+            x = _scale(
+                float(row["total_protein_length"]),
+                x_min,
+                x_max,
+                left,
+                width - right,
+            )
+            y = _scale(
+                float(row["rmsd_after_superposition"]),
+                y_min,
+                y_max,
+                height - bottom,
+                top,
+            )
+            label = html.escape(
+                f"{row.get('pdb_id')} / {row.get('sample', 'sample')} / {row.get('seed') or 'seed'}"
+            )
+            lines.append(
+                f'<circle class="sample-point" cx="{x:.1f}" cy="{y:.1f}" r="3"><title>{label}</title></circle>'
+            )
+
+    show_labels = len(selected) <= 18
+    for row in selected.to_dict(orient="records"):
         x = _scale(float(row["total_protein_length"]), x_min, x_max, left, width - right)
         y = _scale(float(row["model_selected_rmsd"]), y_min, y_max, height - bottom, top)
         label = html.escape(str(row["pdb_id"]))
         lines.append(f'<circle class="point" cx="{x:.1f}" cy="{y:.1f}" r="5"><title>{label}</title></circle>')
+        lines.append(f'<circle class="selected-ring" cx="{x:.1f}" cy="{y:.1f}" r="8"></circle>')
         if show_labels:
             lines.append(
                 f'<text x="{x + 8:.1f}" y="{y - 8:.1f}" font-size="11">{label}</text>'
             )
+
+    legend_x = width - right - 220
+    legend_y = top + 8
+    lines.append(f'<circle class="sample-point" cx="{legend_x:.1f}" cy="{legend_y:.1f}" r="4"></circle>')
+    lines.append(
+        f'<text x="{legend_x + 12:.1f}" y="{legend_y + 4:.1f}" font-size="12">all samples / seeds</text>'
+    )
+    lines.append(f'<circle class="point" cx="{legend_x:.1f}" cy="{legend_y + 20:.1f}" r="5"></circle>')
+    lines.append(
+        f'<circle class="selected-ring" cx="{legend_x:.1f}" cy="{legend_y + 20:.1f}" r="8"></circle>'
+    )
+    lines.append(
+        f'<text x="{legend_x + 12:.1f}" y="{legend_y + 24:.1f}" font-size="12">selected sample per PDB</text>'
+    )
 
     lines.append("</svg>")
     return _write_text(output_path, "\n".join(lines))

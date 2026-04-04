@@ -86,6 +86,28 @@ def test_summary_and_svg_generation(tmp_path: Path) -> None:
     failures_df = results_df[results_df["status"] == "failed"].assign(
         failure_reason="Synthetic failure"
     )
+    sample_points_df = pd.DataFrame(
+        [
+            {
+                "pdb_id": "2CRB",
+                "total_protein_length": 97,
+                "sample": "sample_1",
+                "seed": "seed_1",
+                "rmsd_after_superposition": 1.5,
+                "sample_ranking_score": 0.92,
+                "avg_plddt": 88.0,
+            },
+            {
+                "pdb_id": "2CRB",
+                "total_protein_length": 97,
+                "sample": "sample_2",
+                "seed": "seed_1",
+                "rmsd_after_superposition": 1.8,
+                "sample_ranking_score": 0.74,
+                "avg_plddt": 82.0,
+            },
+        ]
+    )
 
     summary = summarize_results(results_df, preview_df, failures_df)
     binned_df = build_binned_summary(results_df)
@@ -93,6 +115,7 @@ def test_summary_and_svg_generation(tmp_path: Path) -> None:
         results_df,
         output_path=tmp_path / "scatter.svg",
         regression=summary.get("linear_regression"),
+        sample_points_df=sample_points_df,
     )
     binned_path = write_binned_svg(
         binned_df,
@@ -105,6 +128,7 @@ def test_summary_and_svg_generation(tmp_path: Path) -> None:
     assert binned_path.exists()
     assert "<svg" in scatter_path.read_text(encoding="utf-8")
     assert "<svg" in binned_path.read_text(encoding="utf-8")
+    assert "all samples / seeds" in scatter_path.read_text(encoding="utf-8")
 
 
 def test_resolve_openfold_repo_dir_supports_embedded_layout(tmp_path: Path) -> None:

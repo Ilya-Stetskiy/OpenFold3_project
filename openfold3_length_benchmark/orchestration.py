@@ -193,6 +193,27 @@ def _results_dataframe(rows: list[dict[str, Any]]) -> pd.DataFrame:
     )
 
 
+def _sample_points_dataframe(sample_rows: list[dict[str, Any]]) -> pd.DataFrame:
+    if not sample_rows:
+        return pd.DataFrame(
+            columns=[
+                "pdb_id",
+                "total_protein_length",
+                "sample",
+                "seed",
+                "rmsd_after_superposition",
+                "sample_ranking_score",
+                "avg_plddt",
+                "is_selected_model",
+                "is_oracle_best",
+            ]
+        )
+    return pd.DataFrame(sample_rows).sort_values(
+        by=["pdb_id", "sample_ranking_score", "rmsd_after_superposition"],
+        ascending=[True, False, True],
+    )
+
+
 def run_length_benchmark(
     runtime: RuntimeConfig,
     pdb_ids: str | Iterable[str],
@@ -235,6 +256,7 @@ def run_length_benchmark(
     batch_runtime = clone_runtime(runtime, results_dir=openfold_outputs_dir)
 
     rows: list[dict[str, Any]] = []
+    sample_rows: list[dict[str, Any]] = []
     for composition in compositions:
         reference_path: Path | None = None
         submitted_query_path: Path | None = None
@@ -284,6 +306,21 @@ def run_length_benchmark(
             if selected_row is None or oracle_row is None:
                 raise ValueError(f"No RMSD rows were produced for {composition.pdb_id}")
 
+            for sample_row in rmsd_df.to_dict(orient="records"):
+                sample_rows.append(
+                    {
+                        "pdb_id": composition.pdb_id,
+                        "total_protein_length": composition.total_protein_length,
+                        "sample": sample_row.get("sample"),
+                        "seed": sample_row.get("seed"),
+                        "rmsd_after_superposition": sample_row.get("rmsd_after_superposition"),
+                        "sample_ranking_score": sample_row.get("sample_ranking_score"),
+                        "avg_plddt": sample_row.get("avg_plddt"),
+                        "is_selected_model": sample_row.get("sample") == selected_row.get("sample"),
+                        "is_oracle_best": sample_row.get("sample") == oracle_row.get("sample"),
+                    }
+                )
+
             rows.append(
                 _success_row(
                     composition,
@@ -310,9 +347,11 @@ def run_length_benchmark(
             )
 
     results_df = _results_dataframe(rows)
+    sample_points_df = _sample_points_dataframe(sample_rows)
     failures_df = results_df[results_df["status"] == "failed"].copy()
     failures_df.to_csv(run_root / "failures.csv", index=False)
     results_df.to_csv(run_root / "results.csv", index=False)
+    sample_points_df.to_csv(run_root / "sample_points.csv", index=False)
 
     summary = summarize_results(results_df, preview_df, failures_df)
     plot_paths = {
@@ -320,6 +359,7 @@ def run_length_benchmark(
             results_df,
             output_path=plots_dir / "length_vs_rmsd.svg",
             regression=summary.get("linear_regression"),  # type: ignore[arg-type]
+            sample_points_df=sample_points_df,
         ),
         "binned_svg": write_binned_svg(
             pd.DataFrame(summary.get("binned_summary") or []),
