@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import shutil
 import time
 from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Iterable
 
 import pandas as pd
@@ -33,6 +35,7 @@ RESULT_COLUMNS = [
     "pdb_id",
     "status",
     "failure_reason",
+    "chain_group",
     "total_protein_length",
     "chain_count",
     "chain_lengths",
@@ -81,6 +84,75 @@ def _build_query_payload(composition: EntryComposition) -> dict[str, Any]:
             }
         }
     }
+
+
+def _chain_group(chain_count: int) -> str:
+    if chain_count == 1:
+        return "single_chain"
+    if chain_count == 2:
+        return "double_chain"
+    return "other_chain"
+
+
+def _prediction_cache_key(
+    *,
+    query_payload: dict[str, Any],
+    use_msa_server: bool,
+    num_diffusion_samples: int,
+    num_model_seeds: int,
+    runner_yaml: str | Path | None,
+) -> str:
+    payload = {
+        "query_payload": query_payload,
+        "use_msa_server": use_msa_server,
+        "num_diffusion_samples": num_diffusion_samples,
+        "num_model_seeds": num_model_seeds,
+        "runner_yaml": None if runner_yaml is None else str(Path(runner_yaml)),
+        "use_templates": False,
+    }
+    encoded = json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")
+    return hashlib.sha1(encoded).hexdigest()[:16]
+
+
+def _prediction_cache_root(runs_root: Path) -> Path:
+    return runs_root.parent / "prediction_cache"
+
+
+def _prediction_cache_dir(
+    *,
+    runs_root: Path,
+    composition: EntryComposition,
+    cache_key: str,
+) -> Path:
+    return _prediction_cache_root(runs_root) / _chain_group(composition.chain_count) / composition.pdb_id / cache_key
+
+
+def _is_prediction_cache_complete(cache_dir: Path) -> bool:
+    output_dir = cache_dir / "output"
+    summary_dir = cache_dir / "summary"
+    return output_dir.exists() and summary_dir.exists() and any(output_dir.rglob("*_model.cif")) and any(output_dir.rglob("*_confidences_aggregated.json"))
+
+
+def _cached_prediction_result(cache_dir: Path):
+    return SimpleNamespace(
+        query_path=cache_dir / "query.json",
+        run_dir=cache_dir,
+        summary_dir=cache_dir / "summary",
+        output_dir=cache_dir / "output",
+    )
+
+
+def _store_prediction_cache(prediction_result, cache_dir: Path, metadata: dict[str, Any]) -> None:
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    output_cache_dir = cache_dir / "output"
+    summary_cache_dir = cache_dir / "summary"
+    if not output_cache_dir.exists():
+        shutil.copytree(prediction_result.output_dir, output_cache_dir)
+    if not summary_cache_dir.exists():
+        shutil.copytree(prediction_result.summary_dir, summary_cache_dir)
+    if not (cache_dir / "query.json").exists():
+        shutil.copy2(prediction_result.query_path, cache_dir / "query.json")
+    _write_json(cache_dir / "cache_metadata.json", metadata)
 
 
 def _run_rmsd_benchmark(
@@ -132,6 +204,7 @@ def _failure_row(
         "pdb_id": composition.pdb_id,
         "status": "failed",
         "failure_reason": failure_reason,
+        "chain_group": _chain_group(composition.chain_count),
         "total_protein_length": composition.total_protein_length or None,
         "chain_count": composition.chain_count,
         "chain_lengths": _format_chain_lengths(composition),
@@ -165,6 +238,7 @@ def _success_row(
         "pdb_id": composition.pdb_id,
         "status": "ok",
         "failure_reason": None,
+        "chain_group": _chain_group(composition.chain_count),
         "total_protein_length": composition.total_protein_length,
         "chain_count": composition.chain_count,
         "chain_lengths": _format_chain_lengths(composition),
@@ -198,6 +272,7 @@ def _sample_points_dataframe(sample_rows: list[dict[str, Any]]) -> pd.DataFrame:
         return pd.DataFrame(
             columns=[
                 "pdb_id",
+                "chain_group",
                 "total_protein_length",
                 "sample",
                 "seed",
@@ -280,16 +355,45 @@ def run_length_benchmark(
         submitted_query_path = _write_json(queries_dir / f"{composition.pdb_id}.json", query_payload)
 
         try:
-            prediction_result = run_prediction(
-                batch_runtime,
-                query_payload,
-                experiment_name=composition.pdb_id,
-                use_templates=False,
+            cache_key = _prediction_cache_key(
+                query_payload=query_payload,
                 use_msa_server=use_msa_server,
                 num_diffusion_samples=num_diffusion_samples,
                 num_model_seeds=num_model_seeds,
                 runner_yaml=runner_yaml,
             )
+            cache_dir = _prediction_cache_dir(
+                runs_root=runs_root,
+                composition=composition,
+                cache_key=cache_key,
+            )
+
+            if _is_prediction_cache_complete(cache_dir):
+                prediction_result = _cached_prediction_result(cache_dir)
+            else:
+                prediction_result = run_prediction(
+                    batch_runtime,
+                    query_payload,
+                    experiment_name=composition.pdb_id,
+                    use_templates=False,
+                    use_msa_server=use_msa_server,
+                    num_diffusion_samples=num_diffusion_samples,
+                    num_model_seeds=num_model_seeds,
+                    runner_yaml=runner_yaml,
+                )
+                _store_prediction_cache(
+                    prediction_result,
+                    cache_dir,
+                    metadata={
+                        "pdb_id": composition.pdb_id,
+                        "cache_key": cache_key,
+                        "chain_group": _chain_group(composition.chain_count),
+                        "num_diffusion_samples": num_diffusion_samples,
+                        "num_model_seeds": num_model_seeds,
+                        "use_msa_server": use_msa_server,
+                        "runner_yaml": None if runner_yaml is None else str(runner_yaml),
+                    },
+                )
 
             rmsd_output_dir = _run_rmsd_benchmark(
                 runtime=batch_runtime,
@@ -310,6 +414,7 @@ def run_length_benchmark(
                 sample_rows.append(
                     {
                         "pdb_id": composition.pdb_id,
+                        "chain_group": _chain_group(composition.chain_count),
                         "total_protein_length": composition.total_protein_length,
                         "sample": sample_row.get("sample"),
                         "seed": sample_row.get("seed"),
@@ -353,6 +458,17 @@ def run_length_benchmark(
     results_df.to_csv(run_root / "results.csv", index=False)
     sample_points_df.to_csv(run_root / "sample_points.csv", index=False)
 
+    graph_results_root = run_root / "graph_results"
+    single_dir = graph_results_root / "single_chain"
+    double_dir = graph_results_root / "double_chain"
+    for category_dir in (single_dir, double_dir):
+        category_dir.mkdir(parents=True, exist_ok=True)
+
+    results_df[results_df["chain_group"] == "single_chain"].to_csv(single_dir / "results.csv", index=False)
+    results_df[results_df["chain_group"] == "double_chain"].to_csv(double_dir / "results.csv", index=False)
+    sample_points_df[sample_points_df["chain_group"] == "single_chain"].to_csv(single_dir / "sample_points.csv", index=False)
+    sample_points_df[sample_points_df["chain_group"] == "double_chain"].to_csv(double_dir / "sample_points.csv", index=False)
+
     summary = summarize_results(results_df, preview_df, failures_df)
     plot_paths = {
         "scatter_svg": write_scatter_svg(
@@ -383,6 +499,7 @@ def run_length_benchmark(
             "run_root": str(run_root),
             "summary": summary,
             "records": results_df.to_dict(orient="records"),
+            "sample_points": sample_points_df.to_dict(orient="records"),
             "preview": preview_df.to_dict(orient="records"),
         },
     )
@@ -392,10 +509,12 @@ def run_length_benchmark(
         run_root=run_root,
         preview_df=preview_df,
         results_df=results_df,
+        sample_points_df=sample_points_df,
         failures_df=failures_df,
         summary=summary,
         summary_path=summary_path,
         results_csv_path=run_root / "results.csv",
+        sample_points_csv_path=run_root / "sample_points.csv",
         results_json_path=results_json_path,
         failures_csv_path=run_root / "failures.csv",
         plot_paths=plot_paths,

@@ -94,10 +94,12 @@ class BenchmarkRunResult:
     run_root: Path
     preview_df: pd.DataFrame
     results_df: pd.DataFrame
+    sample_points_df: pd.DataFrame
     failures_df: pd.DataFrame
     summary: dict[str, object]
     summary_path: Path
     results_csv_path: Path
+    sample_points_csv_path: Path
     results_json_path: Path
     failures_csv_path: Path
     plot_paths: dict[str, Path]

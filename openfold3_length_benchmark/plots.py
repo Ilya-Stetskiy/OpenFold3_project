@@ -3,6 +3,7 @@ from __future__ import annotations
 import html
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 
@@ -24,8 +25,16 @@ def _svg_header(width: int, height: int, title: str) -> list[str]:
         ".sample-point { fill: #94a3b8; opacity: 0.35; }",
         ".point { fill: #0f766e; opacity: 0.9; }",
         ".selected-ring { fill: none; stroke: #0f766e; stroke-width: 2; opacity: 0.95; }",
+        ".sample-point-single { fill: #94a3b8; opacity: 0.35; }",
+        ".sample-point-double { fill: #fdba74; opacity: 0.35; }",
+        ".point-single { fill: #0f766e; opacity: 0.95; }",
+        ".point-double { fill: #c2410c; opacity: 0.95; }",
+        ".selected-ring-single { fill: none; stroke: #0f766e; stroke-width: 2; opacity: 0.95; }",
+        ".selected-ring-double { fill: none; stroke: #c2410c; stroke-width: 2; opacity: 0.95; }",
         ".bar { fill: #2563eb; opacity: 0.85; }",
         ".line { stroke: #dc2626; stroke-width: 2; }",
+        ".line-single { stroke: #0f766e; stroke-width: 2; }",
+        ".line-double { stroke: #c2410c; stroke-width: 2; }",
         "</style>",
         f'<text x="24" y="32" font-size="20" font-weight="700">{escaped_title}</text>',
     ]
@@ -137,7 +146,7 @@ def write_scatter_svg(
         f'<text x="24" y="{top + plot_height / 2:.1f}" font-size="14" transform="rotate(-90 24,{top + plot_height / 2:.1f})" text-anchor="middle">RMSD after superposition</text>'
     )
 
-    if regression is not None:
+    if regression is not None and "chain_group" not in selected.columns:
         slope = regression.get("slope")
         intercept = regression.get("intercept")
         if slope is not None and intercept is not None:
@@ -153,8 +162,36 @@ def write_scatter_svg(
                 f'<line class="line" x1="{px1:.1f}" y1="{py1:.1f}" x2="{px2:.1f}" y2="{py2:.1f}" />'
             )
 
+    category_styles = {
+        "single_chain": {
+            "sample_class": "sample-point-single",
+            "point_class": "point-single",
+            "ring_class": "selected-ring-single",
+            "line_class": "line-single",
+            "label": "single-chain",
+        },
+        "double_chain": {
+            "sample_class": "sample-point-double",
+            "point_class": "point-double",
+            "ring_class": "selected-ring-double",
+            "line_class": "line-double",
+            "label": "double-chain",
+        },
+    }
+
     if not samples.empty:
         for row in samples.to_dict(orient="records"):
+            chain_group = str(row.get("chain_group") or "single_chain")
+            style = category_styles.get(
+                chain_group,
+                {
+                    "sample_class": "sample-point",
+                    "point_class": "point",
+                    "ring_class": "selected-ring",
+                    "line_class": "line",
+                    "label": chain_group,
+                },
+            )
             x = _scale(
                 float(row["total_protein_length"]),
                 x_min,
@@ -173,16 +210,51 @@ def write_scatter_svg(
                 f"{row.get('pdb_id')} / {row.get('sample', 'sample')} / {row.get('seed') or 'seed'}"
             )
             lines.append(
-                f'<circle class="sample-point" cx="{x:.1f}" cy="{y:.1f}" r="3"><title>{label}</title></circle>'
+                f'<circle class="{style["sample_class"]}" cx="{x:.1f}" cy="{y:.1f}" r="3"><title>{label}</title></circle>'
+            )
+
+    if "chain_group" in selected.columns:
+        for chain_group, group_df in selected.groupby("chain_group"):
+            if len(group_df) < 2:
+                continue
+            style = category_styles.get(str(chain_group))
+            if style is None:
+                continue
+            slope, intercept = np.polyfit(
+                group_df["total_protein_length"].astype(float),
+                group_df["model_selected_rmsd"].astype(float),
+                1,
+            )
+            x1 = x_min
+            y1 = slope * x1 + intercept
+            x2 = x_max
+            y2 = slope * x2 + intercept
+            px1 = _scale(x1, x_min, x_max, left, width - right)
+            py1 = _scale(y1, y_min, y_max, height - bottom, top)
+            px2 = _scale(x2, x_min, x_max, left, width - right)
+            py2 = _scale(y2, y_min, y_max, height - bottom, top)
+            lines.append(
+                f'<line class="{style["line_class"]}" x1="{px1:.1f}" y1="{py1:.1f}" x2="{px2:.1f}" y2="{py2:.1f}" />'
             )
 
     show_labels = len(selected) <= 18
     for row in selected.to_dict(orient="records"):
+        chain_group = str(row.get("chain_group") or "single_chain")
+        style = category_styles.get(
+            chain_group,
+            {
+                "sample_class": "sample-point",
+                "point_class": "point",
+                "ring_class": "selected-ring",
+                "line_class": "line",
+                "label": chain_group,
+            },
+        )
         x = _scale(float(row["total_protein_length"]), x_min, x_max, left, width - right)
         y = _scale(float(row["model_selected_rmsd"]), y_min, y_max, height - bottom, top)
         label = html.escape(str(row["pdb_id"]))
-        lines.append(f'<circle class="point" cx="{x:.1f}" cy="{y:.1f}" r="5"><title>{label}</title></circle>')
-        lines.append(f'<circle class="selected-ring" cx="{x:.1f}" cy="{y:.1f}" r="8"></circle>')
+        lines.append(f'<circle class="{style["point_class"]}" cx="{x:.1f}" cy="{y:.1f}" r="5"><title>{label}</title></circle>')
+        lines.append(f'<circle class="{style["ring_class"]}" cx="{x:.1f}" cy="{y:.1f}" r="8"></circle>')
         if show_labels:
             lines.append(
                 f'<text x="{x + 8:.1f}" y="{y - 8:.1f}" font-size="11">{label}</text>'
@@ -190,16 +262,27 @@ def write_scatter_svg(
 
     legend_x = width - right - 220
     legend_y = top + 8
-    lines.append(f'<circle class="sample-point" cx="{legend_x:.1f}" cy="{legend_y:.1f}" r="4"></circle>')
+    lines.append(f'<circle class="sample-point-single" cx="{legend_x:.1f}" cy="{legend_y:.1f}" r="4"></circle>')
     lines.append(
-        f'<text x="{legend_x + 12:.1f}" y="{legend_y + 4:.1f}" font-size="12">all samples / seeds</text>'
+        f'<text x="{legend_x + 12:.1f}" y="{legend_y + 4:.1f}" font-size="12">single-chain samples</text>'
     )
-    lines.append(f'<circle class="point" cx="{legend_x:.1f}" cy="{legend_y + 20:.1f}" r="5"></circle>')
+    lines.append(f'<circle class="point-single" cx="{legend_x:.1f}" cy="{legend_y + 20:.1f}" r="5"></circle>')
     lines.append(
-        f'<circle class="selected-ring" cx="{legend_x:.1f}" cy="{legend_y + 20:.1f}" r="8"></circle>'
+        f'<circle class="selected-ring-single" cx="{legend_x:.1f}" cy="{legend_y + 20:.1f}" r="8"></circle>'
     )
     lines.append(
-        f'<text x="{legend_x + 12:.1f}" y="{legend_y + 24:.1f}" font-size="12">selected sample per PDB</text>'
+        f'<text x="{legend_x + 12:.1f}" y="{legend_y + 24:.1f}" font-size="12">single-chain selected</text>'
+    )
+    lines.append(f'<circle class="sample-point-double" cx="{legend_x:.1f}" cy="{legend_y + 44:.1f}" r="4"></circle>')
+    lines.append(
+        f'<text x="{legend_x + 12:.1f}" y="{legend_y + 48:.1f}" font-size="12">double-chain samples</text>'
+    )
+    lines.append(f'<circle class="point-double" cx="{legend_x:.1f}" cy="{legend_y + 64:.1f}" r="5"></circle>')
+    lines.append(
+        f'<circle class="selected-ring-double" cx="{legend_x:.1f}" cy="{legend_y + 64:.1f}" r="8"></circle>'
+    )
+    lines.append(
+        f'<text x="{legend_x + 12:.1f}" y="{legend_y + 68:.1f}" font-size="12">double-chain selected</text>'
     )
 
     lines.append("</svg>")

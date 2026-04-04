@@ -46,6 +46,7 @@ def test_summary_and_svg_generation(tmp_path: Path) -> None:
         [
             {
                 "pdb_id": "2CRB",
+                "chain_group": "single_chain",
                 "status": "ok",
                 "total_protein_length": 97,
                 "model_selected_rmsd": 1.5,
@@ -55,6 +56,7 @@ def test_summary_and_svg_generation(tmp_path: Path) -> None:
             },
             {
                 "pdb_id": "5KC1",
+                "chain_group": "double_chain",
                 "status": "ok",
                 "total_protein_length": 2712,
                 "model_selected_rmsd": 4.0,
@@ -64,6 +66,7 @@ def test_summary_and_svg_generation(tmp_path: Path) -> None:
             },
             {
                 "pdb_id": "1PSM",
+                "chain_group": "single_chain",
                 "status": "ok",
                 "total_protein_length": 38,
                 "model_selected_rmsd": 0.9,
@@ -73,6 +76,7 @@ def test_summary_and_svg_generation(tmp_path: Path) -> None:
             },
             {
                 "pdb_id": "4ZEY",
+                "chain_group": "single_chain",
                 "status": "failed",
                 "total_protein_length": 84,
                 "model_selected_rmsd": None,
@@ -90,6 +94,7 @@ def test_summary_and_svg_generation(tmp_path: Path) -> None:
         [
             {
                 "pdb_id": "2CRB",
+                "chain_group": "single_chain",
                 "total_protein_length": 97,
                 "sample": "sample_1",
                 "seed": "seed_1",
@@ -99,6 +104,7 @@ def test_summary_and_svg_generation(tmp_path: Path) -> None:
             },
             {
                 "pdb_id": "2CRB",
+                "chain_group": "single_chain",
                 "total_protein_length": 97,
                 "sample": "sample_2",
                 "seed": "seed_1",
@@ -128,7 +134,9 @@ def test_summary_and_svg_generation(tmp_path: Path) -> None:
     assert binned_path.exists()
     assert "<svg" in scatter_path.read_text(encoding="utf-8")
     assert "<svg" in binned_path.read_text(encoding="utf-8")
-    assert "all samples / seeds" in scatter_path.read_text(encoding="utf-8")
+    scatter_svg = scatter_path.read_text(encoding="utf-8")
+    assert "single-chain samples" in scatter_svg
+    assert "double-chain selected" in scatter_svg
 
 
 def test_resolve_openfold_repo_dir_supports_embedded_layout(tmp_path: Path) -> None:
