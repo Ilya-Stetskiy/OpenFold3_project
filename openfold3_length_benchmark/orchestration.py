@@ -114,8 +114,15 @@ def _prediction_cache_key(
     return hashlib.sha1(encoded).hexdigest()[:16]
 
 
-def _prediction_cache_root(runs_root: Path) -> Path:
-    return runs_root.parent / "prediction_cache"
+def _prediction_cache_root(
+    runs_root: Path,
+    prediction_cache_root: str | Path | None = None,
+) -> Path:
+    return (
+        Path(prediction_cache_root).expanduser().resolve()
+        if prediction_cache_root is not None
+        else runs_root.parent / "prediction_cache"
+    )
 
 
 def _prediction_cache_dir(
@@ -123,8 +130,14 @@ def _prediction_cache_dir(
     runs_root: Path,
     composition: EntryComposition,
     cache_key: str,
+    prediction_cache_root: str | Path | None = None,
 ) -> Path:
-    return _prediction_cache_root(runs_root) / _chain_group(composition.chain_count) / composition.pdb_id / cache_key
+    return (
+        _prediction_cache_root(runs_root, prediction_cache_root)
+        / _chain_group(composition.chain_count)
+        / composition.pdb_id
+        / cache_key
+    )
 
 
 def _is_prediction_cache_complete(cache_dir: Path) -> bool:
@@ -299,6 +312,7 @@ def run_length_benchmark(
     num_model_seeds: int = 1,
     runner_yaml: str | Path | None = None,
     output_root: str | Path | None = None,
+    prediction_cache_root: str | Path | None = None,
     max_entries: int | None = None,
     cache_dir: str | Path | None = None,
 ) -> BenchmarkRunResult:
@@ -366,6 +380,7 @@ def run_length_benchmark(
                 runs_root=runs_root,
                 composition=composition,
                 cache_key=cache_key,
+                prediction_cache_root=prediction_cache_root,
             )
 
             if _is_prediction_cache_complete(cache_dir):

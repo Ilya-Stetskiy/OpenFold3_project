@@ -114,6 +114,7 @@ def test_run_length_benchmark_writes_outputs_and_keeps_partial_failures(
         runtime=runtime,
         pdb_ids="2crb 4zey",
         output_root=tmp_path / "benchmark_runs",
+        prediction_cache_root=tmp_path / "prediction_cache",
     )
 
     assert result.results_csv_path.exists()
@@ -133,3 +134,4 @@ def test_run_length_benchmark_writes_outputs_and_keeps_partial_failures(
     submitted_query = Path(rows.loc["2CRB", "submitted_query_path"])
     assert submitted_query.exists()
     assert (result.run_root / "refs" / "2CRB.cif").exists()
+    assert (tmp_path / "prediction_cache" / "single_chain" / "2CRB").exists()

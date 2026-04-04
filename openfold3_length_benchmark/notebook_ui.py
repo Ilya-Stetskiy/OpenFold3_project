@@ -48,6 +48,7 @@ def build_notebook_controls(
             num_model_seeds=config.get("num_model_seeds", 1),
             runner_yaml=config.get("runner_yaml"),
             output_root=config.get("output_root"),
+            prediction_cache_root=config.get("prediction_cache_root"),
             max_entries=config.get("max_entries"),
         )
         state["result"] = result
