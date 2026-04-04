@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import shutil
-import subprocess
 import time
 from datetime import datetime
 from pathlib import Path
@@ -18,10 +17,10 @@ from .analysis import (
     summarize_results,
     write_summary_markdown,
 )
+from .benchmarking import run_rmsd_benchmark
 from .composition import collect_entry_compositions, parse_pdb_ids, preview_entries
 from .interop import (
     RuntimeConfig,
-    benchmark_cli_path,
     clone_runtime,
     default_runs_root,
     run_prediction,
@@ -92,50 +91,20 @@ def _run_rmsd_benchmark(
     output_dir: Path,
     atom_set: str,
 ) -> Path:
-    output_dir.mkdir(parents=True, exist_ok=True)
-    log_path = output_dir / "benchmark_rmsd.log"
-    openfold_repo_dir = Path(runtime.openfold_repo_dir).expanduser().resolve()
-    cli_path = benchmark_cli_path(openfold_repo_dir)
-    cmd = [
-        str(runtime.openfold_python),
-        str(cli_path),
-        "--pred-root",
-        str(pred_root),
-        "--ref-dir",
-        str(ref_dir),
-        "--output-dir",
-        str(output_dir),
-        "--atom-set",
-        str(atom_set),
-    ]
-
-    env = runtime.build_env()
     started = time.perf_counter()
-    with log_path.open("w", encoding="utf-8") as handle:
-        process = subprocess.Popen(
-            cmd,
-            cwd=openfold_repo_dir,
-            env=env,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            bufsize=1,
-        )
-        assert process.stdout is not None
-        for line in process.stdout:
-            print(line.rstrip(), flush=True)
-            handle.write(line)
-        return_code = process.wait()
-
-    if return_code != 0:
-        raise subprocess.CalledProcessError(return_code, cmd)
-
+    output_dir = run_rmsd_benchmark(
+        pred_root=pred_root,
+        ref_dir=ref_dir,
+        output_dir=output_dir,
+        atom_set=atom_set,
+    )
     _write_json(
         output_dir / "benchmark_runtime.json",
         {
-            "return_code": return_code,
             "elapsed_seconds": time.perf_counter() - started,
-            "cmd": cmd,
+            "atom_set": atom_set,
+            "pred_root": str(pred_root),
+            "ref_dir": str(ref_dir),
         },
     )
     return output_dir
