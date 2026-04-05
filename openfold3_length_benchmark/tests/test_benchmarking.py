@@ -38,6 +38,64 @@ def test_compute_structure_rmsd_superposes_transformed_model(tmp_path: Path) -> 
     result = compute_structure_rmsd(pred_path, ref_path, atom_set="ca")
 
     assert result["coverage"]["matched_atom_count"] == 3
+    assert result["coverage"]["matching_mode"] == "exact"
+    assert result["rmsd_after_superposition"] < 1e-6
+
+
+def test_compute_structure_rmsd_falls_back_to_ordinal_residue_matching(tmp_path: Path) -> None:
+    pred_path = tmp_path / "pred.cif"
+    ref_path = tmp_path / "ref.cif"
+    pred_path.write_text(
+        """data_pred
+loop_
+_atom_site.group_PDB
+_atom_site.id
+_atom_site.type_symbol
+_atom_site.label_atom_id
+_atom_site.auth_atom_id
+_atom_site.label_comp_id
+_atom_site.auth_comp_id
+_atom_site.label_asym_id
+_atom_site.auth_asym_id
+_atom_site.label_seq_id
+_atom_site.auth_seq_id
+_atom_site.Cartn_x
+_atom_site.Cartn_y
+_atom_site.Cartn_z
+ATOM 1 C CA CA GLY GLY A A 1 1 0.0 0.0 0.0
+ATOM 2 C CA CA GLY GLY A A 2 2 1.0 0.0 0.0
+#
+""",
+        encoding="utf-8",
+    )
+    ref_path.write_text(
+        """data_ref
+loop_
+_atom_site.group_PDB
+_atom_site.id
+_atom_site.type_symbol
+_atom_site.label_atom_id
+_atom_site.auth_atom_id
+_atom_site.label_comp_id
+_atom_site.auth_comp_id
+_atom_site.label_asym_id
+_atom_site.auth_asym_id
+_atom_site.label_seq_id
+_atom_site.auth_seq_id
+_atom_site.Cartn_x
+_atom_site.Cartn_y
+_atom_site.Cartn_z
+ATOM 1 C CA CA GLY GLY A A 101 101 0.0 0.0 0.0
+ATOM 2 C CA CA GLY GLY A A 102 102 1.0 0.0 0.0
+#
+""",
+        encoding="utf-8",
+    )
+
+    result = compute_structure_rmsd(pred_path, ref_path, atom_set="ca")
+
+    assert result["coverage"]["matched_atom_count"] == 2
+    assert result["coverage"]["matching_mode"] == "ordinal_chain_residue"
     assert result["rmsd_after_superposition"] < 1e-6
 
 

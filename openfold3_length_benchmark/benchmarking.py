@@ -4,6 +4,7 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+import re
 
 import numpy as np
 
@@ -154,6 +155,34 @@ def _indexed_coords(
     return indexed
 
 
+def _residue_sort_key(residue_id: str) -> tuple[int, str]:
+    match = re.match(r"(-?\d+)(.*)", str(residue_id))
+    if match:
+        return (int(match.group(1)), match.group(2))
+    return (0, str(residue_id))
+
+
+def _ordinal_indexed_coords(
+    atoms: list[AtomSiteRecord],
+    *,
+    atom_names: set[str] | None,
+) -> dict[tuple[str, int, str], np.ndarray]:
+    by_chain_residue: dict[str, dict[str, dict[str, np.ndarray]]] = {}
+    for atom in atoms:
+        if atom_names is not None and atom.atom_name not in atom_names:
+            continue
+        chain_bucket = by_chain_residue.setdefault(atom.chain_id, {})
+        residue_bucket = chain_bucket.setdefault(atom.residue_id, {})
+        residue_bucket[atom.atom_name] = np.asarray(atom.coord, dtype=float)
+
+    indexed: dict[tuple[str, int, str], np.ndarray] = {}
+    for chain_id, residues in by_chain_residue.items():
+        for ordinal, residue_id in enumerate(sorted(residues, key=_residue_sort_key), start=1):
+            for atom_name, coord in residues[residue_id].items():
+                indexed[(chain_id, ordinal, atom_name)] = coord
+    return indexed
+
+
 def _kabsch_superpose(
     mobile: np.ndarray,
     target: np.ndarray,
@@ -189,6 +218,15 @@ def compute_structure_rmsd(
     pred_index = _indexed_coords(pred_atoms, atom_names=atom_names)
     ref_index = _indexed_coords(ref_atoms, atom_names=atom_names)
     shared_keys = sorted(set(pred_index) & set(ref_index))
+    matching_mode = "exact"
+    if not shared_keys:
+        pred_index_fallback = _ordinal_indexed_coords(pred_atoms, atom_names=atom_names)
+        ref_index_fallback = _ordinal_indexed_coords(ref_atoms, atom_names=atom_names)
+        shared_keys = sorted(set(pred_index_fallback) & set(ref_index_fallback))
+        if shared_keys:
+            pred_index = pred_index_fallback
+            ref_index = ref_index_fallback
+            matching_mode = "ordinal_chain_residue"
     if not shared_keys:
         raise ValueError(f"No shared atoms found between {pred_path} and {ref_path}")
 
@@ -203,6 +241,7 @@ def compute_structure_rmsd(
             "matched_atom_count": int(len(shared_keys)),
             "pred_filtered_atom_count": int(len(pred_index)),
             "ref_filtered_atom_count": int(len(ref_index)),
+            "matching_mode": matching_mode,
         },
     }
 
