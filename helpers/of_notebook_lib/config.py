@@ -67,7 +67,7 @@ class RuntimeConfig:
             self.triton_cache_dir
             or _path_from_env(
                 "OPENFOLD_TRITON_CACHE_DIR",
-                "/tmp/triton_cache",
+                str(self.project_dir / ".runtime" / "triton_cache"),
             )
         )
         self.fixed_msa_tmp_dir = _normalize_path(

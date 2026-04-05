@@ -17,12 +17,16 @@ openfold_notebooks/
       workflows.py
   01_single_complex.ipynb
   02_mutation_batch.ipynb
+  OpenFold3_Length_Benchmark.ipynb
+  OpenFold3_Runtime_Benchmark.ipynb
 ```
 
 What each notebook is for:
 
 - `01_single_complex.ipynb`: run one protein or complex prediction and inspect the best samples.
 - `02_mutation_batch.ipynb`: run a set of point mutations against one base complex and rank the results.
+- `OpenFold3_Length_Benchmark.ipynb`: run RMSD-vs-length experiments on real PDB inputs.
+- `OpenFold3_Runtime_Benchmark.ipynb`: profile cold/warm OpenFold3 runtime, CPU/GPU load, and per-case timelines across protein lengths.
 
 Advanced batch modes on `main`:
 
@@ -60,6 +64,7 @@ Notebook UX:
 - the mutation-batch notebook shows per-sample output, per-mutation summary, and final mutation ranking
 - advanced helper API also exposes `run_screened_mutation_case()`, `compare_mutation_batch_case()`, and `run_server_end_to_end_case()`
 - a local low-memory runner config is available at `./configs/low_mem.yml`
+- runtime profiling artifacts now live under `openfold3_runtime_benchmark/runs/<timestamp>/` with `manifest.json`, `case_results.csv`, `events.jsonl`, `samples.jsonl`, SVG plots, and per-case timeline summaries
 
 ## Advanced Screening API
 
@@ -100,6 +105,7 @@ Included:
 - unit tests for query building and validation
 - analysis tests on bundled fixture output in `tests/fixtures/openfold_output`
 - mocked runtime tests for `runner.py`, including `run_cmd()` and almost all of `run_prediction()`
+- benchmark-package tests for `openfold3_length_benchmark` and `openfold3_runtime_benchmark`
 - coverage report in the default test command
 
 One-command test run on Windows / PowerShell:
