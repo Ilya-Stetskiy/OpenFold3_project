@@ -27,6 +27,9 @@ def _ignore_filter(_src: str, names: list[str]) -> set[str]:
 
 
 def _copy_file(src: Path, dst: Path, *, dry_run: bool) -> None:
+    if src.resolve() == dst.resolve():
+        print(f"SKIP same file {src}")
+        return
     print(f"COPY {src} -> {dst}")
     if dry_run:
         return
@@ -35,6 +38,9 @@ def _copy_file(src: Path, dst: Path, *, dry_run: bool) -> None:
 
 
 def _copy_tree(src: Path, dst: Path, *, dry_run: bool) -> None:
+    if src.resolve() == dst.resolve():
+        print(f"SKIP same directory {src}")
+        return
     print(f"SYNC {src} -> {dst}")
     if dry_run:
         return
