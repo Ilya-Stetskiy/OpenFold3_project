@@ -15,6 +15,7 @@
 import gc
 import importlib
 import logging
+import time
 import traceback
 import warnings
 from contextlib import nullcontext
@@ -40,6 +41,7 @@ from openfold3.core.metrics.quality import (
 from openfold3.core.runners.model_runner import ModelRunner
 from openfold3.core.utils.grad_manager import PerSampleGradManager, compute_global_norm
 from openfold3.core.utils.lr_schedulers import AlphaFoldLRScheduler
+from openfold3.core.utils.profile_events import emit_profile_event
 from openfold3.core.utils.tensor_utils import tensor_tree_map
 from openfold3.core.utils.timing import PerformanceTimer
 from openfold3.projects.of3_all_atom.config.model_config import (
@@ -72,6 +74,16 @@ warnings.filterwarnings(
 )
 
 REFERENCE_CONFIG_PATH = Path(__file__).parent.resolve() / "config/reference_config.yml"
+
+
+def _batch_bool_flags(value) -> list[bool]:
+    if value is None:
+        return []
+    if isinstance(value, torch.Tensor):
+        return [bool(v) for v in value.detach().cpu().reshape(-1).tolist()]
+    if isinstance(value, (list, tuple)):
+        return [bool(v) for v in value]
+    return [bool(value)]
 
 
 class OpenFold3AllAtom(ModelRunner):
@@ -558,13 +570,18 @@ class OpenFold3AllAtom(ModelRunner):
 
     def eval_step(self, batch, batch_idx):
         pdb_id = batch["pdb_id"]
-        is_repeated_sample = batch.get("repeated_sample")
-        if is_repeated_sample:
+        repeated_flags = _batch_bool_flags(batch.get("repeated_sample"))
+        if repeated_flags and all(repeated_flags):
             logger.debug(
                 f"Skipping repeated sample {', '.join(pdb_id)} on rank "
                 f"{self.global_rank}"
             )
             return
+        if repeated_flags and any(repeated_flags):
+            raise ValueError(
+                "Mixed repeated/non-repeated samples in a validation batch are not "
+                "supported. Re-run with data_module_args.batch_size=1 for this input."
+            )
 
         logger.debug(
             f"Started validation for {', '.join(pdb_id)} on rank {self.global_rank} "
@@ -911,19 +928,44 @@ class OpenFold3AllAtom(ModelRunner):
         return confidence_scores
 
     def predict_step(self, batch, batch_idx):
-        # Skip if dataloader fails -> returns empty batch
-        is_repeated_sample = batch.get("repeated_sample")
-        valid_sample = batch.get("valid_sample")
-        if not valid_sample or is_repeated_sample:
-            return
-
         query_id = batch["query_id"]
+        repeated_flags = _batch_bool_flags(batch.get("repeated_sample"))
+        valid_flags = _batch_bool_flags(batch.get("valid_sample"))
+
+        if valid_flags and not any(valid_flags):
+            logger.warning(
+                "Skipping invalid predict batch for query_id(s) %s",
+                ", ".join(query_id),
+            )
+            return
+        if valid_flags and not all(valid_flags):
+            raise ValueError(
+                "Mixed valid/invalid samples in a predict batch are not supported. "
+                "Re-run with data_module_args.batch_size=1 for this input."
+            )
+        if repeated_flags and all(repeated_flags):
+            logger.debug(
+                "Skipping repeated predict batch for query_id(s) %s on rank %s",
+                ", ".join(query_id),
+                self.global_rank,
+            )
+            return
+        if repeated_flags and any(repeated_flags):
+            raise ValueError(
+                "Mixed repeated/non-repeated samples in a predict batch are not "
+                "supported. Re-run with data_module_args.batch_size=1 for this input."
+            )
 
         # Convert seeds back to list
         seed = batch["seed"].cpu().tolist()
         batch["seed"] = seed
 
-        self.reseed(seed[0])  # TODO: assuming we have bs = 1 for now
+        if len(set(seed)) != 1:
+            raise ValueError(
+                "Prediction batching currently requires identical seeds within a "
+                f"batch. Got seeds={seed} for query_id(s) {', '.join(query_id)}."
+            )
+        self.reseed(seed[0])
 
         # Probably need to change the logic
         logger.debug(
@@ -931,11 +973,59 @@ class OpenFold3AllAtom(ModelRunner):
             f"step {self.global_step}"
         )
         try:
+            emit_profile_event(
+                logger,
+                stage="forward",
+                event="start",
+                query_ids=list(query_id),
+                batch_size=len(query_id),
+                rank=self.global_rank,
+            )
+            forward_started = time.perf_counter()
             batch, outputs = self(batch)
+            forward_seconds = time.perf_counter() - forward_started
+            emit_profile_event(
+                logger,
+                stage="forward",
+                event="end",
+                query_ids=list(query_id),
+                batch_size=len(query_id),
+                rank=self.global_rank,
+                duration_seconds=forward_seconds,
+                status="ok",
+            )
 
             # Generate confidence scores
+            emit_profile_event(
+                logger,
+                stage="confidence",
+                event="start",
+                query_ids=list(query_id),
+                batch_size=len(query_id),
+                rank=self.global_rank,
+            )
+            confidence_started = time.perf_counter()
             confidence_scores = self._compute_confidence_scores(batch, outputs)
+            confidence_seconds = time.perf_counter() - confidence_started
+            emit_profile_event(
+                logger,
+                stage="confidence",
+                event="end",
+                query_ids=list(query_id),
+                batch_size=len(query_id),
+                rank=self.global_rank,
+                duration_seconds=confidence_seconds,
+                status="ok",
+            )
             outputs["confidence_scores"] = confidence_scores
+            logger.info(
+                "Predict timings for query_id(s) %s: batch_size=%s forward=%.2fs "
+                "confidence=%.2fs",
+                ", ".join(query_id),
+                len(query_id),
+                forward_seconds,
+                confidence_seconds,
+            )
 
             return batch, outputs
 

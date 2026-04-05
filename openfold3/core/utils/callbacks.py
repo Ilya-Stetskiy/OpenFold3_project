@@ -24,9 +24,20 @@ import torch
 from lightning_fabric.utilities.rank_zero import (
     rank_zero_only,
 )
+from openfold3.core.utils.profile_events import emit_profile_event
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
+
+
+def _batch_bool_flags(value) -> list[bool]:
+    if value is None:
+        return []
+    if isinstance(value, torch.Tensor):
+        return [bool(v) for v in value.detach().cpu().reshape(-1).tolist()]
+    if isinstance(value, (list, tuple)):
+        return [bool(v) for v in value]
+    return [bool(value)]
 
 
 class PredictTimer(pl.Callback):
@@ -41,6 +52,18 @@ class PredictTimer(pl.Callback):
         self, trainer, pl_module, batch, batch_idx, dataloader_idx: int = 0
     ):
         self.batch_start_time = time.perf_counter()
+        emit_profile_event(
+            logger,
+            stage="batch_total",
+            event="start",
+            query_ids=list(batch.get("query_id", [])),
+            seeds=list(batch.get("seed", []))
+            if isinstance(batch.get("seed"), (list, tuple))
+            else None,
+            batch_idx=batch_idx,
+            batch_size=len(batch.get("atom_array", [])),
+            rank=trainer.global_rank,
+        )
 
     def _get_runtime(self):
         """Record the runtime for the current batch."""
@@ -64,7 +87,26 @@ class PredictTimer(pl.Callback):
         runtime = self._get_runtime()
 
         # Skip repeated samples
-        if batch.get("repeated_sample") or outputs is None:
+        repeated_flags = _batch_bool_flags(batch.get("repeated_sample"))
+        if repeated_flags and all(repeated_flags):
+            return
+        if repeated_flags and any(repeated_flags):
+            raise ValueError(
+                "Mixed repeated/non-repeated samples in a predict-timer batch are "
+                "not supported. Re-run with data_module_args.batch_size=1 for this input."
+            )
+        if outputs is None:
+            emit_profile_event(
+                logger,
+                stage="batch_total",
+                event="end",
+                query_ids=list(batch.get("query_id", [])),
+                batch_idx=batch_idx,
+                batch_size=len(batch.get("atom_array", [])),
+                rank=trainer.global_rank,
+                duration_seconds=runtime,
+                status="skipped",
+            )
             return
 
         batch_size = len(batch["atom_array"])
@@ -79,11 +121,24 @@ class PredictTimer(pl.Callback):
             query_id = batch["query_id"][b]
 
             output_subdir = Path(self.output_dir) / query_id / f"seed_{seed}"
+            output_subdir.mkdir(parents=True, exist_ok=True)
 
             # Save runtime for the batch
             runtime_file = output_subdir / "timing.json"
             runtime_json = {"runtime_s": runtime_per_sample}
             runtime_file.write_text(json.dumps(runtime_json, indent=4))
+
+        emit_profile_event(
+            logger,
+            stage="batch_total",
+            event="end",
+            query_ids=list(batch.get("query_id", [])),
+            batch_idx=batch_idx,
+            batch_size=batch_size,
+            rank=trainer.global_rank,
+            duration_seconds=runtime,
+            status="ok",
+        )
 
 
 def set_seed_for_rank(seed: int, rank: int) -> None:

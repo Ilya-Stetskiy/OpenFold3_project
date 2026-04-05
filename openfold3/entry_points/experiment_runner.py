@@ -18,6 +18,7 @@ import operator
 import os
 import shutil
 import sys
+import time
 from abc import ABC, abstractmethod
 from functools import cached_property, wraps
 from pathlib import Path
@@ -50,6 +51,7 @@ from openfold3.core.utils.checkpoint_loading_utils import (
     get_state_dict_from_checkpoint,
     load_checkpoint,
 )
+from openfold3.core.utils.profile_events import emit_profile_event
 from openfold3.core.utils.precision_utils import OF3DeepSpeedPrecision
 from openfold3.core.utils.script_utils import set_ulimits
 from openfold3.entry_points.validator import (
@@ -687,9 +689,33 @@ class InferenceExperimentRunner(ExperimentRunner):
         self._log_experiment_config()
         self._log_model_config()
         logger.info(f"Loading weights from {self.ckpt_path}")
-        ckpt = load_checkpoint(self.ckpt_path)
-        state_dict, _ = get_state_dict_from_checkpoint(ckpt, init_from_ema_weights=True)
-        self._warn_on_missing_version_tensor_in_load_statedict(state_dict)
+        emit_profile_event(
+            logger,
+            stage="checkpoint_load",
+            event="start",
+            ckpt_path=str(self.ckpt_path),
+        )
+        checkpoint_started = time.perf_counter()
+        checkpoint_status = "ok"
+        try:
+            ckpt = load_checkpoint(self.ckpt_path)
+            state_dict, _ = get_state_dict_from_checkpoint(
+                ckpt,
+                init_from_ema_weights=True,
+            )
+            self._warn_on_missing_version_tensor_in_load_statedict(state_dict)
+        except Exception:
+            checkpoint_status = "error"
+            raise
+        finally:
+            emit_profile_event(
+                logger,
+                stage="checkpoint_load",
+                event="end",
+                ckpt_path=str(self.ckpt_path),
+                duration_seconds=time.perf_counter() - checkpoint_started,
+                status=checkpoint_status,
+            )
 
     def run(self, inference_query_set) -> None:
         """Set up the experiment environment."""
@@ -704,11 +730,32 @@ class InferenceExperimentRunner(ExperimentRunner):
 
         self.inference_query_set = inference_query_set
         logger.info("Beginning inference prediction")
-        self.trainer.predict(
-            model=self.lightning_module,
-            datamodule=self.lightning_data_module,
-            return_predictions=False,
+        emit_profile_event(
+            logger,
+            stage="predict_total",
+            event="start",
+            query_count=len(self.inference_query_set.queries),
         )
+        predict_started = time.perf_counter()
+        predict_status = "ok"
+        try:
+            self.trainer.predict(
+                model=self.lightning_module,
+                datamodule=self.lightning_data_module,
+                return_predictions=False,
+            )
+        except Exception:
+            predict_status = "error"
+            raise
+        finally:
+            emit_profile_event(
+                logger,
+                stage="predict_total",
+                event="end",
+                query_count=len(self.inference_query_set.queries),
+                duration_seconds=time.perf_counter() - predict_started,
+                status=predict_status,
+            )
 
     @cached_property
     def callbacks(self):
