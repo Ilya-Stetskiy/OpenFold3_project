@@ -1,0 +1,63 @@
+{
+  "generated_on": "2026-04-06",
+  "project_root": "OpenFold3_project",
+  "layout": {
+    "openfold_repo_dir": "openfold-3",
+    "notebooks_dir": "openfold_notebooks",
+    "third_party_dir": "third_party"
+  },
+  "sources": {
+    "openfold-3": {
+      "base_branch": "codex/openfold-runtime-benchmark",
+      "base_commit": "427bed0d1b1088b015bf0fb0a2d67fe0563bae1a",
+      "integrated_branch": "originpush/codex/mutation-runner-cpu-tests",
+      "integrated_commit": "a5dc0a11b8987390733d6eec385a63451c74285c",
+      "notes": [
+        "built from the current working snapshot",
+        "merged batching, cache, and screening-script functionality into the consolidated tree"
+      ]
+    },
+    "openfold_notebooks": {
+      "base_branch": "codex/openfold-runtime-benchmark",
+      "base_commit": "d6cd596c257ce5d8db64ec6b807b4946f4e0621a",
+      "integrated_branch": "codex/openfold-batch-monitoring",
+      "integrated_commit": "099c2f8ae60ac69314aeb3eb738e389e879fcc44",
+      "notes": [
+        "built from the current working snapshot",
+        "merged monitoring and runner/test coverage additions into the notebook helper layer"
+      ]
+    },
+    "third_party": [
+      {
+        "path": "third_party/binding-ddg-predictor",
+        "source_workspace_path": "../third_party/binding-ddg-predictor",
+        "excluded_artifacts": [
+          "data/model.pt",
+          ".git"
+        ]
+      },
+      {
+        "path": "third_party/Prompt-DDG",
+        "source_workspace_path": "../third_party/Prompt-DDG",
+        "excluded_artifacts": [
+          "trained_models/",
+          ".git"
+        ]
+      },
+      {
+        "path": "third_party/SAAMBE-3D",
+        "source_workspace_path": "../third_party/SAAMBE-3D",
+        "excluded_artifacts": [
+          ".git"
+        ]
+      }
+    ]
+  },
+  "cleanup_targets_removed": [
+    "legacy runtime_screening_gpu_opt worktree",
+    "legacy runtime_mutation_runner_cpu_tests_20260329 snapshot",
+    "legacy old_project snapshot",
+    "nested .git directories",
+    "runtime and test artifacts"
+  ]
+}

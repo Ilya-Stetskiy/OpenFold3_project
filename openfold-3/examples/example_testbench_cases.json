@@ -1,0 +1,34 @@
+{
+  "cases": [
+    {
+      "case_id": "example_case_a",
+      "structure_path": "/absolute/path/to/example_case_a.pdb",
+      "confidence_path": null,
+      "mutations": [
+        {
+          "chain_id": "A",
+          "from_residue": "L",
+          "position_1based": 42,
+          "to_residue": "A"
+        }
+      ],
+      "experimental_ddg": -1.2,
+      "notes": "Benchmark case with experimental ddG"
+    },
+    {
+      "case_id": "example_case_b",
+      "structure_path": "/absolute/path/to/example_case_b.pdb",
+      "confidence_path": null,
+      "mutations": [
+        {
+          "chain_id": "A",
+          "from_residue": "L",
+          "position_1based": 42,
+          "to_residue": "V"
+        }
+      ],
+      "experimental_ddg": null,
+      "notes": "Exploratory case without truth"
+    }
+  ]
+}

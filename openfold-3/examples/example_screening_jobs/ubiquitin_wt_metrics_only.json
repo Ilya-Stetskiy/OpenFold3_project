@@ -1,0 +1,33 @@
+{
+  "base_query": {
+    "chains": [
+      {
+        "molecule_type": "protein",
+        "chain_ids": [
+          "A"
+        ],
+        "sequence": "MQIFVKTLTGKTITLEVEPSDTIENVKAKIQDKEGIPPDQQRLIFAGKQLEDGRTLSDYNIQKESTLHLVLRLRGG"
+      }
+    ]
+  },
+  "mutations": [],
+  "output_dir": "./runtime_smoke/ubiquitin_wt/screening",
+  "cache_dir": "./runtime_smoke/ubiquitin_wt/cache",
+  "query_prefix": "ubiquitin",
+  "include_wt": true,
+  "run_baseline_first": true,
+  "msa_policy": "reuse_precomputed",
+  "template_policy": "reuse_precomputed",
+  "output_policy": "metrics_only",
+  "resume": true,
+  "num_cpu_workers": 1,
+  "max_inflight_queries": 1,
+  "num_diffusion_samples": 1,
+  "num_model_seeds": 1,
+  "runner_yaml": "./examples/example_runner_yamls/low_mem.yml",
+  "use_msa_server": false,
+  "use_templates": false,
+  "min_free_disk_gb": 1.0,
+  "cleanup_query_outputs": true,
+  "log_file": "./runtime_smoke/ubiquitin_wt/screening/night_run.log"
+}

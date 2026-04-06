@@ -1,0 +1,10 @@
+.test_deps/
+.venv/
+.venv_test/
+.pytest_cache/
+**/__pycache__/
+*.pyc
+*.pyo
+*.coverage
+coverage.xml
+server_smoke/_runtime_output/

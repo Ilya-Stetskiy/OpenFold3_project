@@ -1,0 +1,43 @@
+DDG testbench open questions and temporary decisions
+
+1. FoldX protocol target
+Temporary decision:
+Implemented FoldX via BuildModel first, because it is locally runnable and gives a real numeric score now.
+Open question:
+Should the production FoldX path switch to BuildModel + AnalyseComplex for binding ddG, or keep BuildModel as a fast screening proxy?
+
+2. Rosetta protocol choice
+Temporary decision:
+Implemented a first local Rosetta runner through score_jd2-style scoring as a structural energy proxy.
+Open question:
+Should the first production Rosetta ddG implementation be flex_ddG, cartesian_ddg, or keep score_jd2 as a fast proxy alongside a slower ddG protocol?
+
+Rosetta bundle status:
+The Linux bundle archive is available at D:\Download\rosetta_binary_ubuntu_3.15_bundle.tar.bz2.
+Temporary decision:
+Wrote the Rosetta discovery/runner/test harness against env vars and local tool search, then added fallback database discovery relative to the resolved Rosetta binary path.
+Current status:
+Real Rosetta smoke is now confirmed inside the workspace on 2026-03-29 against
+the extracted local Rosetta bundle test PDB under the bundle's
+main/source/test/core/io/ directory
+using the extracted Linux binary bundle and database.
+Operational note:
+Added scripts/dev/install_rosetta_bundle_subset.py to stream-extract only score_jd2 / rosetta_scripts / relax plus database into tools/ without unpacking the full archive when a smaller install is preferred.
+
+3. CIF to PDB conversion policy
+Temporary decision:
+Harness now supports PDB and mmCIF parsing, but FoldX still requires PDB input and returns pdb_conversion_required on CIF cases.
+Open question:
+What conversion route should be canonical for OpenFold CIF outputs before FoldX and Rosetta runs?
+
+4. Benchmark scoring policy
+Temporary decision:
+Evaluation summary computes status counts, score aggregates, runtime means, Pearson and Spearman against experimental ddG when available.
+Open question:
+Which additional metrics are mandatory for your decision process: MAE, RMSE, top-k hit rate, sign accuracy, Kendall, or calibration curves?
+
+5. Registry schema depth
+Temporary decision:
+Implemented a local SQLite registry with runs, cases, and method_runs.
+Open question:
+Do you want stage-level records for CPU-prep, GPU-inference, and CPU-ddG in the first production schema, or only after the scheduler refactor?

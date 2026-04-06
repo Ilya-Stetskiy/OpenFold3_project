@@ -1,0 +1,16 @@
+model_update:
+  presets:
+    - predict
+    - low_mem
+
+data_module_args:
+  predict_num_workers: 4
+  persistent_workers: true
+  predict_persistent_workers: true
+  pin_memory: true
+
+output_writer_settings:
+  metrics_only: true
+  summary_filename: summary.jsonl
+  write_features: false
+  write_latent_outputs: false
