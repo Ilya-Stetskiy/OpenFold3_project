@@ -93,7 +93,7 @@ class RuntimeConfig:
     @property
     def openfold_runner(self) -> Path:
         prefix_runner = self.openfold_prefix / "bin" / "run_openfold"
-        if prefix_runner.exists():
+        if prefix_runner.exists() or prefix_runner.parent.exists():
             return prefix_runner
         active_env_runner = Path(sys.executable).resolve().parent / "run_openfold"
         if active_env_runner.exists():
