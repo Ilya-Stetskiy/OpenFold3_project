@@ -19,3 +19,29 @@
 - Nested git repositories and detached worktrees were removed from the consolidated tree.
 - Local caches, runtime outputs, checkpoints, and test artifacts are intentionally excluded from git.
 - Large third-party model weights are not committed; only source snapshots are kept under `third_party/`.
+
+## Server GPU Check
+
+Run the consolidated server/GPU verification suite from the repo root:
+
+```bash
+bash ./check_server_gpu.sh
+```
+
+What it covers:
+
+- CUDA visibility through `nvidia-smi` and `torch.cuda`
+- merged `openfold-3` mutation-runner tests
+- semantic CUDA smoke tests
+- kernel regression tests
+- notebook/helper test pack
+- real `run_openfold predict` smoke
+- real end-to-end `predict + screen-mutations` smoke
+- comparison wrapper smoke for batch predict vs screening
+
+Useful options:
+
+```bash
+bash ./check_server_gpu.sh --quick
+bash ./check_server_gpu.sh --with-ddg-harness
+```
