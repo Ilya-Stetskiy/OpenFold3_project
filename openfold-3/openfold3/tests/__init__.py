@@ -13,13 +13,26 @@
 # limitations under the License.
 
 import importlib
+import os
+import warnings
 
 from openfold3 import hacks  # noqa: F401
 
-if importlib.util.find_spec("deepspeed") is not None:
-    import deepspeed
-
-    # TODO: Resolve this
-    # This is a hack to prevent deepspeed from doing the triton matmul autotuning
-    # I'm not sure why it's doing this by default, but it's causing the tests to hang
-    deepspeed.HAS_TRITON = False
+if (
+    os.environ.get("OPENFOLD_DISABLE_OPTIONAL_DEEPSPEED_IMPORT", "0").lower()
+    not in {"1", "true", "yes", "on"}
+    and importlib.util.find_spec("deepspeed") is not None
+):
+    try:
+        import deepspeed
+    except Exception as exc:  # pragma: no cover - environment dependent
+        warnings.warn(
+            "openfold3.tests skipped optional deepspeed import during test package initialization: "
+            f"{exc}",
+            RuntimeWarning,
+        )
+    else:
+        # TODO: Resolve this
+        # This is a hack to prevent deepspeed from doing the triton matmul autotuning
+        # I'm not sure why it's doing this by default, but it's causing the tests to hang
+        deepspeed.HAS_TRITON = False

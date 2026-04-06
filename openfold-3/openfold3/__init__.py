@@ -15,6 +15,8 @@
 __all__ = ["core", "projects", "entry_points", "mutation_runner", "run_openfold"]
 
 import importlib.util
+import os
+import warnings
 
 from packaging import version
 
@@ -28,11 +30,22 @@ except ModuleNotFoundError:  # pragma: no cover - environment dependent
 if gemmi is not None and version.parse(gemmi.__version__) >= version.parse("0.7.3"):
     gemmi.set_leak_warnings(False)
 
-if importlib.util.find_spec("deepspeed") is not None:
-    import deepspeed
-
-    # TODO: Resolve this later
-    # This is a hack to prevent deepspeed from doing the triton matmul autotuning
-    # This has weird effects with hanging if libaio is not installed and can
-    # cause restart errors if run is preempted in the middle of autotuning
-    deepspeed.HAS_TRITON = False
+if (
+    os.environ.get("OPENFOLD_DISABLE_OPTIONAL_DEEPSPEED_IMPORT", "0").lower()
+    not in {"1", "true", "yes", "on"}
+    and importlib.util.find_spec("deepspeed") is not None
+):
+    try:
+        import deepspeed
+    except Exception as exc:  # pragma: no cover - environment dependent
+        warnings.warn(
+            "OpenFold3 skipped optional deepspeed import during package initialization: "
+            f"{exc}",
+            RuntimeWarning,
+        )
+    else:
+        # TODO: Resolve this later
+        # This is a hack to prevent deepspeed from doing the triton matmul autotuning
+        # This has weird effects with hanging if libaio is not installed and can
+        # cause restart errors if run is preempted in the middle of autotuning
+        deepspeed.HAS_TRITON = False
