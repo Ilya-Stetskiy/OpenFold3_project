@@ -17,6 +17,7 @@ openfold_notebooks/
       workflows.py
   01_single_complex.ipynb
   02_mutation_batch.ipynb
+  OpenFold3_DDG_Stand.ipynb
   OpenFold3_Length_Benchmark.ipynb
   OpenFold3_Runtime_Benchmark.ipynb
 ```
@@ -25,6 +26,7 @@ What each notebook is for:
 
 - `01_single_complex.ipynb`: run one protein or complex prediction and inspect the best samples.
 - `02_mutation_batch.ipynb`: run a set of point mutations against one base complex and rank the results.
+- `OpenFold3_DDG_Stand.ipynb`: run WT-plus-19-mutants ddG panels over one or many positions with SQLite-backed resume state and consensus summary export.
 - `OpenFold3_Length_Benchmark.ipynb`: run RMSD-vs-length experiments on real PDB inputs.
 - `OpenFold3_Runtime_Benchmark.ipynb`: profile cold/warm OpenFold3 runtime, CPU/GPU load, and per-case timelines across protein lengths.
 
@@ -58,10 +60,12 @@ Typical usage:
 Notebook UX:
 
 - both notebooks have one main user-edit cell
+- the ddG stand notebook adds one main experiment-config cell plus an automatic panel preview
 - both notebooks show an input preview before launch
 - both notebooks write `query.json`, `run_openfold.log`, raw outputs, and a `summary/` folder
 - the single-complex notebook shows a compact best-sample table and a quick interpretation
 - the mutation-batch notebook shows per-sample output, per-mutation summary, and final mutation ranking
+- the ddG stand notebook writes `state.sqlite`, per-job ddG reports, and a `summary_exports/` folder with consensus ranking tables
 - advanced helper API also exposes `run_screened_mutation_case()`, `compare_mutation_batch_case()`, and `run_server_end_to_end_case()`
 - a local low-memory runner config is available at `./configs/low_mem.yml`
 - runtime profiling artifacts now live under `openfold3_runtime_benchmark/runs/<timestamp>/` with `manifest.json`, `case_results.csv`, `events.jsonl`, `samples.jsonl`, SVG plots, and per-case timeline summaries
