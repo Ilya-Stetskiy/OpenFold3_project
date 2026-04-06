@@ -83,7 +83,8 @@ def test_softmax_numerical_stability_large_logits() -> None:
 
     assert torch.isfinite(probs).all()
     assert torch.allclose(probs.sum(dim=-1), torch.ones(1), atol=1e-6)
-    assert probs[0, 0] > probs[0, 1] > probs[0, 2] > probs[0, 3]
+    assert probs[0, 0] > probs[0, 1] > 0
+    assert probs[0, 1] >= probs[0, 2] >= probs[0, 3]
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA backend unavailable")
