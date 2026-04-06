@@ -89,6 +89,25 @@ def _best_summary_rows(summary_path: Path) -> dict[str, dict[str, Any]]:
     return {query_id: max(rows, key=_sort_key) for query_id, rows in grouped.items()}
 
 
+def _merge_inference_query_sets(query_json_paths: Iterable[Path]) -> InferenceQuerySet:
+    merged_queries: dict[str, Query] = {}
+    seeds: list[int] | None = None
+    for query_json_path in query_json_paths:
+        query_set = InferenceQuerySet.from_json(query_json_path)
+        if seeds is None:
+            seeds = list(query_set.seeds)
+        for query_id, query in query_set.queries.items():
+            if query_id in merged_queries:
+                raise ValueError(f"Duplicate query_id {query_id} in merged predict batch")
+            merged_queries[query_id] = query
+    if not merged_queries:
+        raise ValueError("No queries were provided for merged predict batch")
+    return InferenceQuerySet(
+        seeds=[42] if seeds is None else seeds,
+        queries=merged_queries,
+    )
+
+
 def _infer_structure_path(aggregated_confidence_path: str | None) -> Path | None:
     if aggregated_confidence_path is None:
         return None
@@ -492,7 +511,6 @@ class PanelDdgStandRunner:
         self.db = PanelStandState(self.output_root / "state.sqlite")
         self.harness = DdgBenchmarkHarness(methods=multiscale_methods())
         self.analysis_allowed = threading.Event()
-        self.predict_queue: queue.Queue[str | None] = queue.Queue()
         self.analysis_queue: queue.Queue[str | None] = queue.Queue()
         self._deferred_analysis_job_ids: list[str] = []
         self._deferred_analysis_lock = threading.Lock()
@@ -535,6 +553,9 @@ class PanelDdgStandRunner:
 
     def _wt_dir(self) -> Path:
         return self.output_root / "wt"
+
+    def _batched_predict_dir(self) -> Path:
+        return self.output_root / "predict_batch"
 
     def _build_panels(self) -> tuple[str, Query, list[MutationPanel]]:
         wt_query_id, wt_query = _load_single_query(self.config.wt_query_json)
@@ -797,24 +818,97 @@ class PanelDdgStandRunner:
             self._log(f"[msa-failed] {panel.panel_id}: {exc}")
             return False
 
-    def _predict_worker(self) -> None:
-        while True:
-            panel_id = self.predict_queue.get()
-            if panel_id is None:
-                self.predict_queue.task_done()
-                return
-            try:
-                self._ensure_panel_predict(panel_id)
-            finally:
-                self.predict_queue.task_done()
+    def _predict_panel_batch(self, panel_ids: Iterable[str]) -> None:
+        panel_ids = [str(panel_id) for panel_id in panel_ids]
+        if not panel_ids:
+            return
+        predict_batch_dir = self._batched_predict_dir()
+        predict_batch_dir.mkdir(parents=True, exist_ok=True)
+        merged_query_json = predict_batch_dir / "query_msa_merged.json"
+        panel_rows: dict[str, sqlite3.Row] = {}
+        jobs_by_panel: dict[str, list[sqlite3.Row]] = {}
+        msa_query_paths: list[Path] = []
+        for panel_id in panel_ids:
+            panel_row = self.db.fetch_panel(panel_id)
+            if panel_row is None:
+                continue
+            panel_rows[panel_id] = panel_row
+            jobs_by_panel[panel_id] = self.db.list_jobs_for_panel(panel_id)
+            msa_query_paths.append(Path(panel_row["msa_query_json"]))
+            self.db.set_panel_stage(panel_id, "predict", "running", last_error=None)
 
-    def _ensure_panel_predict(self, panel_id: str) -> None:
+        if not msa_query_paths:
+            return
+
+        try:
+            merged_query_set = _merge_inference_query_sets(msa_query_paths)
+            merged_query_json.write_text(
+                merged_query_set.model_dump_json(indent=2),
+                encoding="utf-8",
+            )
+            summary_path = self._predict(merged_query_json, predict_batch_dir, "panel_batch")
+            best_rows = _best_summary_rows(summary_path)
+        except Exception as exc:
+            for panel_id in panel_ids:
+                self.db.set_panel_stage(panel_id, "predict", "failed", last_error=str(exc))
+            self._log(f"[predict-batch-failed] {exc}")
+            return
+
+        for panel_id in panel_ids:
+            jobs = jobs_by_panel.get(panel_id, [])
+            queued_job_ids: list[str] = []
+            failures: list[str] = []
+            for job in jobs:
+                best = best_rows.get(job["query_id"])
+                if best is None:
+                    self.db.update_job_predict(
+                        job["job_id"],
+                        status="failed",
+                        structure_path=None,
+                        confidence_path=None,
+                        last_error=f"missing_summary_row:{job['query_id']}",
+                    )
+                    failures.append(str(job["job_id"]))
+                    continue
+                confidence_path = Path(best["aggregated_confidence_path"])
+                structure_path = _infer_structure_path(best["aggregated_confidence_path"])
+                if structure_path is None:
+                    self.db.update_job_predict(
+                        job["job_id"],
+                        status="failed",
+                        structure_path=None,
+                        confidence_path=confidence_path,
+                        last_error="structure_output_missing",
+                    )
+                    failures.append(str(job["job_id"]))
+                    continue
+                self.db.update_job_predict(
+                    job["job_id"],
+                    status="done",
+                    structure_path=structure_path,
+                    confidence_path=confidence_path,
+                    last_error=None,
+                )
+                if job["analysis_status"] != "done":
+                    queued_job_ids.append(str(job["job_id"]))
+
+            if failures:
+                self.db.set_panel_stage(
+                    panel_id,
+                    "predict",
+                    "failed",
+                    last_error=",".join(failures),
+                )
+            else:
+                self.db.set_panel_stage(panel_id, "predict", "done", last_error=None)
+            self._enqueue_analysis_jobs(queued_job_ids)
+
+    def _panel_ready_for_predict(self, panel_id: str) -> bool:
         panel_row = self.db.fetch_panel(panel_id)
         if panel_row is None:
-            return
+            return False
         panel_dir = self._panel_dir(panel_id)
         msa_query_json = panel_dir / "msa" / "query_msa.json"
-        predict_dir = panel_dir / "predict"
         jobs = self.db.list_jobs_for_panel(panel_id)
         if (
             panel_row["predict_status"] == "done"
@@ -831,48 +925,8 @@ class PanelDdgStandRunner:
             self._enqueue_analysis_jobs(
                 job["job_id"] for job in jobs if job["analysis_status"] != "done"
             )
-            return
-        try:
-            self.db.set_panel_stage(panel_id, "predict", "running", last_error=None)
-            summary_path = self._predict(msa_query_json, predict_dir, panel_id)
-            best_rows = _best_summary_rows(summary_path)
-            queued_job_ids: list[str] = []
-            for job in jobs:
-                best = best_rows.get(job["query_id"])
-                if best is None:
-                    self.db.update_job_predict(
-                        job["job_id"],
-                        status="failed",
-                        structure_path=None,
-                        confidence_path=None,
-                        last_error=f"missing_summary_row:{job['query_id']}",
-                    )
-                    continue
-                confidence_path = Path(best["aggregated_confidence_path"])
-                structure_path = _infer_structure_path(best["aggregated_confidence_path"])
-                if structure_path is None:
-                    self.db.update_job_predict(
-                        job["job_id"],
-                        status="failed",
-                        structure_path=None,
-                        confidence_path=confidence_path,
-                        last_error="structure_output_missing",
-                    )
-                    continue
-                self.db.update_job_predict(
-                    job["job_id"],
-                    status="done",
-                    structure_path=structure_path,
-                    confidence_path=confidence_path,
-                    last_error=None,
-                )
-                if job["analysis_status"] != "done":
-                    queued_job_ids.append(str(job["job_id"]))
-            self.db.set_panel_stage(panel_id, "predict", "done", last_error=None)
-            self._enqueue_analysis_jobs(queued_job_ids)
-        except Exception as exc:
-            self.db.set_panel_stage(panel_id, "predict", "failed", last_error=str(exc))
-            self._log(f"[predict-failed] {panel_id}: {exc}")
+            return False
+        return panel_row["msa_status"] == "done" and msa_query_json.exists()
 
     def _analysis_worker(self) -> None:
         self.analysis_allowed.wait()
@@ -992,17 +1046,16 @@ class PanelDdgStandRunner:
         for thread in analysis_threads:
             thread.start()
 
-        gpu_thread = threading.Thread(target=self._predict_worker, daemon=True)
-        gpu_thread.start()
-
         if self.config.msa_panel_workers <= 1:
+            ready_panel_ids: list[str] = []
             for index, panel in enumerate(panels, start=1):
                 self._log(f"[msa {index}/{len(panels)}] {panel.panel_id}")
                 if self._ensure_panel_msa(panel, wt_query):
-                    self.predict_queue.put(panel.panel_id)
+                    ready_panel_ids.append(panel.panel_id)
         else:
             from concurrent.futures import ThreadPoolExecutor, as_completed
 
+            ready_panel_ids = []
             with ThreadPoolExecutor(max_workers=max(1, self.config.msa_panel_workers)) as executor:
                 futures = {
                     executor.submit(self._ensure_panel_msa, panel, wt_query): panel
@@ -1011,13 +1064,18 @@ class PanelDdgStandRunner:
                 for future in as_completed(futures):
                     panel = futures[future]
                     if future.result():
-                        self.predict_queue.put(panel.panel_id)
+                        ready_panel_ids.append(panel.panel_id)
 
-        self.predict_queue.put(None)
+        batch_predict_panel_ids = [
+            panel_id for panel_id in ready_panel_ids if self._panel_ready_for_predict(panel_id)
+        ]
+        if batch_predict_panel_ids:
+            self._log(
+                f"[predict batch] launching one predict worker for {len(batch_predict_panel_ids)} panels"
+            )
+            self._predict_panel_batch(batch_predict_panel_ids)
         self.analysis_allowed.set()
         self._drain_deferred_analysis_jobs()
-
-        gpu_thread.join()
         for _ in analysis_threads:
             self.analysis_queue.put(None)
         for thread in analysis_threads:
