@@ -23,6 +23,17 @@ This repository now contains an initial `openfold3.testbench` scaffold for compa
 - `scripts/dev/summarize_ddg_testbench.py`
   Builds an aggregate summary from previously written report JSON files.
 
+- `scripts/dev/run_multiscale_ddg_testbench.py`
+  Runs the mutation-centric multiscale ddG benchmark with the five primary
+  method families only, without the extra server-only wrappers.
+
+- `scripts/dev/run_panel_ddg_stand.py`
+  Runs the WT-plus-19-mutants panel stand over one or many mutable positions
+  and persists the staged panel state in SQLite.
+
+- `scripts/dev/summarize_panel_ddg_stand.py`
+  Builds consensus/ranking exports from a completed `state.sqlite` panel run.
+
 ## Single-case example
 
 ```bash
@@ -52,6 +63,30 @@ PYTHONPATH=/path/to/openfold-3 python3 scripts/dev/run_ddg_testbench.py \
 - `evaluation_summary.json`
 - `registry.sqlite`
 - `reports/<case_id>.json`
+
+## Panel Stand
+
+The repository also contains a position-wise panel runner that expands one WT
+query into mutation panels and tracks MSA, prediction, and ddG-analysis status
+through a `state.sqlite` database.
+
+Single-target example:
+
+```bash
+PYTHONPATH=/path/to/openfold-3 python3 scripts/dev/run_panel_ddg_stand.py \
+  --target-id spike_demo \
+  --wt-query-json /absolute/path/to/wt_query.json \
+  --output-root runtime_smoke/panel_ddg_stand \
+  --mutable-chain-id A \
+  --positions 614,615
+```
+
+Summary export:
+
+```bash
+PYTHONPATH=/path/to/openfold-3 python3 scripts/dev/summarize_panel_ddg_stand.py \
+  --run-root runtime_smoke/panel_ddg_stand
+```
 
 ## Current limitations
 
