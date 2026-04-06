@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import importlib
+import inspect
 import unittest
 
 import torch
@@ -28,6 +29,47 @@ def skip_unless_ds4s_installed():
     )
     return unittest.skipUnless(
         ds4s_is_installed, "Requires DeepSpeed with version ≥ 0.10.4"
+    )
+
+
+def _ds4s_backward_is_available() -> bool:
+    deepspeed_is_installed = importlib.util.find_spec("deepspeed") is not None
+    ds4s_is_installed = (
+        deepspeed_is_installed
+        and importlib.util.find_spec("deepspeed.ops.deepspeed4science") is not None
+    )
+    if not ds4s_is_installed:
+        return False
+
+    try:
+        module = importlib.import_module(
+            "deepspeed.ops.deepspeed4science.evoformer_attn"
+        )
+        backward = module.EvoformerFusedAttention.backward
+    except Exception:
+        return True
+
+    code = getattr(backward, "__code__", None)
+    if code is not None and any(
+        isinstance(constant, str)
+        and "Backward is not implemented for patched EvoformerFusedAttention fallback"
+        in constant
+        for constant in code.co_consts
+    ):
+        return False
+
+    try:
+        source = inspect.getsource(backward)
+    except (OSError, TypeError):
+        return True
+
+    return "patched EvoformerFusedAttention fallback" not in source
+
+
+def skip_unless_ds4s_backward_installed():
+    return unittest.skipUnless(
+        _ds4s_backward_is_available(),
+        "Requires DeepSpeed DS4Sci attention backward support",
     )
 
 

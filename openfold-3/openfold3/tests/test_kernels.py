@@ -232,7 +232,7 @@ class TestKernels(unittest.TestCase):
             err = torch.max(torch.abs(t_repro.grad.cpu() - t_gt.grad.cpu()))
             self.assertTrue(err < eps, f"Error item {name}: {err}")
 
-    @compare_utils.skip_unless_ds4s_installed()
+    @compare_utils.skip_unless_ds4s_backward_installed()
     def test_dsk_backward_bf16(self):
         self._compare_attn_kernel_backward(
             use_deepspeed_evo_attention=True,
@@ -240,7 +240,7 @@ class TestKernels(unittest.TestCase):
             dtype=torch.bfloat16,
         )
 
-    @compare_utils.skip_unless_ds4s_installed()
+    @compare_utils.skip_unless_ds4s_backward_installed()
     def test_dsk_backward_fp32(self):
         self._compare_attn_kernel_backward(
             use_deepspeed_evo_attention=True,
