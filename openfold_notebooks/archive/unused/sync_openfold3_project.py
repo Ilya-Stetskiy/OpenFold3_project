@@ -5,7 +5,7 @@ import shutil
 from pathlib import Path
 
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 OPENFOLD_REPO_ROOT = REPO_ROOT.parent / "openfold-3"
 
 COPY_DIRS = [
@@ -209,8 +209,8 @@ def sync_project(project_root: Path, *, dry_run: bool) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(
         description=(
-            "Sync the notebook benchmark package into a single OpenFold3_project tree "
-            "and patch openfold3/runtime sources that are used at inference time."
+            "Archived sync helper kept for manual recovery. "
+            "It is not part of the active OpenFold3_project workflow."
         )
     )
     parser.add_argument(

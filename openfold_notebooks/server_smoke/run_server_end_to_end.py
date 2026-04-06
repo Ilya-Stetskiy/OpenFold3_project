@@ -1,15 +1,17 @@
 from __future__ import annotations
 
 import argparse
-import json
 import sys
 from pathlib import Path
 
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-HELPERS_DIR = PROJECT_ROOT / "helpers"
-if str(HELPERS_DIR) not in sys.path:
-    sys.path.insert(0, str(HELPERS_DIR))
+from smoke_common import DEFAULT_QUERY_JSON, ensure_helpers_on_path, load_query_molecules
+
+
+ensure_helpers_on_path()
 
 from of_notebook_lib import RuntimeConfig  # noqa: E402
 from of_notebook_lib.workflows import run_server_end_to_end_case  # noqa: E402
@@ -20,7 +22,7 @@ def main() -> None:
     parser.add_argument(
         "--query-json",
         type=Path,
-        default=PROJECT_ROOT / "server_smoke" / "query_ubiquitin.json",
+        default=DEFAULT_QUERY_JSON,
     )
     parser.add_argument("--query-id", type=str, default=None)
     parser.add_argument("--experiment-name", type=str, default="ubiquitin_server_e2e")
@@ -40,10 +42,7 @@ def main() -> None:
     parser.add_argument("--single-only", action="store_true")
     args = parser.parse_args()
 
-    query_payload = json.loads(args.query_json.read_text(encoding="utf-8"))
-    queries = query_payload["queries"]
-    query_id = args.query_id or next(iter(queries))
-    molecules = queries[query_id]["chains"]
+    _query_id, molecules = load_query_molecules(args.query_json, args.query_id)
 
     runtime = RuntimeConfig()
     result = run_server_end_to_end_case(
