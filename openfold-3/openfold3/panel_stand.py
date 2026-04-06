@@ -18,6 +18,7 @@ from openfold3.benchmark.harness import DdgBenchmarkHarness
 from openfold3.benchmark.methods import multiscale_methods
 from openfold3.benchmark.models import BenchmarkCase, MutationInput
 from openfold3.mutation_runner import CANONICAL_AA, apply_point_mutation
+from openfold3.panel_profiling import PanelExperimentProfiler, PanelProfilingArtifacts
 from openfold3.projects.of3_all_atom.config.inference_query_format import (
     InferenceQuerySet,
     Query,
@@ -157,6 +158,8 @@ class PanelStandConfig:
     msa_panel_workers: int = 1
     analysis_workers: int = 4
     cleanup_intermediates: bool = True
+    enable_profiling: bool = True
+    profiling_sample_interval_seconds: float = 1.0
 
 
 class PanelStandState:
@@ -515,6 +518,15 @@ class PanelDdgStandRunner:
         self._deferred_analysis_job_ids: list[str] = []
         self._deferred_analysis_lock = threading.Lock()
         self._log_lock = threading.Lock()
+        self.profiler = (
+            PanelExperimentProfiler(
+                output_root=self.output_root / "profiling",
+                run_id=self.config.target_id,
+                sample_interval_seconds=self.config.profiling_sample_interval_seconds,
+            )
+            if self.config.enable_profiling
+            else None
+        )
 
     def close(self) -> None:
         self.db.close()
@@ -538,10 +550,26 @@ class PanelDdgStandRunner:
             bufsize=1,
             env=env,
         )
+        if self.profiler is not None:
+            self.profiler.record_stage(
+                "subprocess",
+                "start",
+                source=prefix,
+                details={"pid": process.pid, "command": command},
+            )
         assert process.stdout is not None
         for line in process.stdout:
             self._log(f"[{prefix}] {line.rstrip()}")
+            if self.profiler is not None:
+                self.profiler.record_log_line(line, source=prefix)
         return_code = process.wait()
+        if self.profiler is not None:
+            self.profiler.record_stage(
+                "subprocess",
+                "end",
+                source=prefix,
+                details={"pid": process.pid, "return_code": return_code},
+            )
         if return_code != 0:
             raise subprocess.CalledProcessError(return_code, command)
 
@@ -715,6 +743,8 @@ class PanelDdgStandRunner:
 
         try:
             if wt_row["msa_status"] != "done" or not (msa_dir / "query_msa.json").exists():
+                if self.profiler is not None:
+                    self.profiler.record_stage("wt_msa", "start", source="panel_stand")
                 self.db.set_wt_stage(
                     self.config.target_id,
                     "msa",
@@ -730,12 +760,16 @@ class PanelDdgStandRunner:
                     msa_query_json=query_msa_json,
                     last_error=None,
                 )
+                if self.profiler is not None:
+                    self.profiler.record_stage("wt_msa", "end", source="panel_stand")
             else:
                 query_msa_json = msa_dir / "query_msa.json"
 
             wt_row = self.db.fetch_wt(self.config.target_id)
             assert wt_row is not None
             if wt_row["predict_status"] != "done" or not (predict_dir / "summary.jsonl").exists():
+                if self.profiler is not None:
+                    self.profiler.record_stage("wt_predict", "start", source="panel_stand")
                 self.db.set_wt_stage(
                     self.config.target_id,
                     "predict",
@@ -756,10 +790,14 @@ class PanelDdgStandRunner:
                     confidence_path=confidence_path,
                     last_error=None,
                 )
+                if self.profiler is not None:
+                    self.profiler.record_stage("wt_predict", "end", source="panel_stand")
 
             wt_row = self.db.fetch_wt(self.config.target_id)
             assert wt_row is not None
             if wt_row["analysis_status"] != "done" or not wt_report_path.exists():
+                if self.profiler is not None:
+                    self.profiler.record_stage("wt_analysis", "start", source="panel_stand")
                 if wt_row["structure_path"] is None:
                     raise RuntimeError("WT predict stage is complete but structure_path is missing")
                 case = BenchmarkCase(
@@ -788,6 +826,8 @@ class PanelDdgStandRunner:
                     rosetta_score=rosetta_score,
                     last_error=None,
                 )
+                if self.profiler is not None:
+                    self.profiler.record_stage("wt_analysis", "end", source="panel_stand")
         except Exception as exc:
             self.db.set_wt_stage(self.config.target_id, "analysis", "failed", last_error=str(exc))
             raise
@@ -800,6 +840,8 @@ class PanelDdgStandRunner:
         assert row is not None
         msa_dir = panel_dir / "msa"
         try:
+            if self.profiler is not None:
+                self.profiler.record_stage("panel_msa", "start", source=panel.panel_id)
             if row["msa_status"] == "done" and (msa_dir / "query_msa.json").exists():
                 self._log(f"[resume] panel MSA ready {panel.panel_id}")
                 return True
@@ -812,6 +854,8 @@ class PanelDdgStandRunner:
                 msa_query_json=query_msa_json,
                 last_error=None,
             )
+            if self.profiler is not None:
+                self.profiler.record_stage("panel_msa", "end", source=panel.panel_id)
             return True
         except Exception as exc:
             self.db.set_panel_stage(panel.panel_id, "msa", "failed", last_error=str(exc))
@@ -841,6 +885,13 @@ class PanelDdgStandRunner:
             return
 
         try:
+            if self.profiler is not None:
+                self.profiler.record_stage(
+                    "panel_batch_predict",
+                    "start",
+                    source="panel_stand",
+                    details={"panel_count": len(panel_ids)},
+                )
             merged_query_set = _merge_inference_query_sets(msa_query_paths)
             merged_query_json.write_text(
                 merged_query_set.model_dump_json(indent=2),
@@ -848,6 +899,13 @@ class PanelDdgStandRunner:
             )
             summary_path = self._predict(merged_query_json, predict_batch_dir, "panel_batch")
             best_rows = _best_summary_rows(summary_path)
+            if self.profiler is not None:
+                self.profiler.record_stage(
+                    "panel_batch_predict",
+                    "end",
+                    source="panel_stand",
+                    details={"panel_count": len(panel_ids), "summary_path": str(summary_path)},
+                )
         except Exception as exc:
             for panel_id in panel_ids:
                 self.db.set_panel_stage(panel_id, "predict", "failed", last_error=str(exc))
@@ -975,6 +1033,8 @@ class PanelDdgStandRunner:
         )
         report_path = self._report_path(job_id)
         try:
+            if self.profiler is not None:
+                self.profiler.record_stage("job_analysis", "start", source=job_id)
             report = self.harness.run_case(case)
             DdgBenchmarkHarness.write_report(report, report_path)
             self.db.replace_method_results(job_id, [asdict(result) for result in report.results])
@@ -994,6 +1054,8 @@ class PanelDdgStandRunner:
                 rosetta_delta_vs_wt=rosetta_delta,
                 last_error=None,
             )
+            if self.profiler is not None:
+                self.profiler.record_stage("job_analysis", "end", source=job_id)
             self._maybe_cleanup_panel(str(job_row["panel_id"]))
         except Exception as exc:
             self.db.update_job_analysis(
@@ -1022,70 +1084,114 @@ class PanelDdgStandRunner:
                 shutil.rmtree(path, ignore_errors=True)
         self.db.set_panel_stage(panel_id, "cleanup", "done", last_error=None)
 
-    def _write_summary(self) -> Path:
+    def _write_summary(
+        self, profiling_artifacts: PanelProfilingArtifacts | None = None
+    ) -> Path:
         payload = {
             "target_id": self.config.target_id,
             "mutable_chain_id": self.config.mutable_chain_id,
             "positions": list(self.config.positions),
             "summary": self.db.summary(),
+            "profiling": (
+                None
+                if profiling_artifacts is None
+                else {
+                    "events_path": str(profiling_artifacts.events_path),
+                    "samples_path": str(profiling_artifacts.samples_path),
+                    "summary_path": str(profiling_artifacts.summary_path),
+                    "timeline_svg_path": str(profiling_artifacts.timeline_svg_path),
+                }
+            ),
         }
         path = self.output_root / "summary.json"
         path.write_text(json.dumps(payload, indent=2, default=_json_default), encoding="utf-8")
         return path
 
     def run(self) -> dict[str, Any]:
-        wt_query_id, wt_query, panels = self._build_panels()
-        self._ensure_wt(wt_query_id, wt_query)
-        for panel in panels:
-            self.db.upsert_panel(self.config.target_id, panel, self._panel_dir(panel.panel_id))
+        profiling_artifacts: PanelProfilingArtifacts | None = None
+        if self.profiler is not None:
+            self.profiler.start()
+        try:
+            wt_query_id, wt_query, panels = self._build_panels()
+            self._ensure_wt(wt_query_id, wt_query)
+            for panel in panels:
+                self.db.upsert_panel(
+                    self.config.target_id,
+                    panel,
+                    self._panel_dir(panel.panel_id),
+                )
 
-        analysis_threads = [
-            threading.Thread(target=self._analysis_worker, daemon=True)
-            for _ in range(max(1, self.config.analysis_workers))
-        ]
-        for thread in analysis_threads:
-            thread.start()
+            analysis_threads = [
+                threading.Thread(target=self._analysis_worker, daemon=True)
+                for _ in range(max(1, self.config.analysis_workers))
+            ]
+            for thread in analysis_threads:
+                thread.start()
 
-        if self.config.msa_panel_workers <= 1:
-            ready_panel_ids: list[str] = []
-            for index, panel in enumerate(panels, start=1):
-                self._log(f"[msa {index}/{len(panels)}] {panel.panel_id}")
-                if self._ensure_panel_msa(panel, wt_query):
-                    ready_panel_ids.append(panel.panel_id)
-        else:
-            from concurrent.futures import ThreadPoolExecutor, as_completed
-
-            ready_panel_ids = []
-            with ThreadPoolExecutor(max_workers=max(1, self.config.msa_panel_workers)) as executor:
-                futures = {
-                    executor.submit(self._ensure_panel_msa, panel, wt_query): panel
-                    for panel in panels
-                }
-                for future in as_completed(futures):
-                    panel = futures[future]
-                    if future.result():
+            if self.config.msa_panel_workers <= 1:
+                ready_panel_ids: list[str] = []
+                for index, panel in enumerate(panels, start=1):
+                    self._log(f"[msa {index}/{len(panels)}] {panel.panel_id}")
+                    if self._ensure_panel_msa(panel, wt_query):
                         ready_panel_ids.append(panel.panel_id)
+            else:
+                from concurrent.futures import ThreadPoolExecutor, as_completed
 
-        batch_predict_panel_ids = [
-            panel_id for panel_id in ready_panel_ids if self._panel_ready_for_predict(panel_id)
-        ]
-        if batch_predict_panel_ids:
-            self._log(
-                f"[predict batch] launching one predict worker for {len(batch_predict_panel_ids)} panels"
-            )
-            self._predict_panel_batch(batch_predict_panel_ids)
-        self.analysis_allowed.set()
-        self._drain_deferred_analysis_jobs()
-        for _ in analysis_threads:
-            self.analysis_queue.put(None)
-        for thread in analysis_threads:
-            thread.join()
+                ready_panel_ids = []
+                with ThreadPoolExecutor(
+                    max_workers=max(1, self.config.msa_panel_workers)
+                ) as executor:
+                    futures = {
+                        executor.submit(self._ensure_panel_msa, panel, wt_query): panel
+                        for panel in panels
+                    }
+                    for future in as_completed(futures):
+                        panel = futures[future]
+                        if future.result():
+                            ready_panel_ids.append(panel.panel_id)
 
-        summary_path = self._write_summary()
+            batch_predict_panel_ids = [
+                panel_id
+                for panel_id in ready_panel_ids
+                if self._panel_ready_for_predict(panel_id)
+            ]
+            if batch_predict_panel_ids:
+                self._log(
+                    f"[predict batch] launching one predict worker for {len(batch_predict_panel_ids)} panels"
+                )
+                self._predict_panel_batch(batch_predict_panel_ids)
+            self.analysis_allowed.set()
+            self._drain_deferred_analysis_jobs()
+            for _ in analysis_threads:
+                self.analysis_queue.put(None)
+            for thread in analysis_threads:
+                thread.join()
+        except Exception:
+            if self.profiler is not None:
+                profiling_artifacts = self.profiler.stop()
+            raise
+
+        if self.profiler is not None:
+            profiling_artifacts = self.profiler.stop()
+        summary_path = self._write_summary(profiling_artifacts=profiling_artifacts)
         return {
             "output_root": str(self.output_root),
             "state_db": str(self.output_root / "state.sqlite"),
             "summary_path": str(summary_path),
             "panel_count": len(panels),
             "mutant_job_count": sum(len(panel.job_ids) for panel in panels),
+            "profiling_summary_path": (
+                None if profiling_artifacts is None else str(profiling_artifacts.summary_path)
+            ),
+            "profiling_events_path": (
+                None if profiling_artifacts is None else str(profiling_artifacts.events_path)
+            ),
+            "profiling_samples_path": (
+                None if profiling_artifacts is None else str(profiling_artifacts.samples_path)
+            ),
+            "profiling_timeline_svg_path": (
+                None
+                if profiling_artifacts is None
+                else str(profiling_artifacts.timeline_svg_path)
+            ),
         }

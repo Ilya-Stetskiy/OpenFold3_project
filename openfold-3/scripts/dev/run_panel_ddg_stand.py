@@ -88,6 +88,18 @@ def main() -> None:
     parser.add_argument("--msa-panel-workers", type=int, default=1)
     parser.add_argument("--analysis-workers", type=int, default=4)
     parser.add_argument(
+        "--enable-profiling",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Collect CPU/GPU/process telemetry under output_root/profiling",
+    )
+    parser.add_argument(
+        "--profiling-sample-interval-seconds",
+        type=float,
+        default=1.0,
+        help="Telemetry sampling interval in seconds",
+    )
+    parser.add_argument(
         "--cleanup-intermediates",
         action=argparse.BooleanOptionalAction,
         default=True,
@@ -121,6 +133,8 @@ def main() -> None:
         num_model_seeds=args.num_model_seeds,
         msa_panel_workers=args.msa_panel_workers,
         analysis_workers=args.analysis_workers,
+        enable_profiling=args.enable_profiling,
+        profiling_sample_interval_seconds=args.profiling_sample_interval_seconds,
         cleanup_intermediates=args.cleanup_intermediates,
     )
     runner = PanelDdgStandRunner(config)

@@ -15,6 +15,7 @@
 import json
 
 from openfold3.panel_stand import PanelDdgStandRunner, PanelStandConfig
+from openfold3.panel_profiling import PanelExperimentProfiler
 
 
 def test_panel_stand_builds_19_mutants_per_position(tmp_path):
@@ -102,3 +103,35 @@ def test_panel_stand_state_upserts_panel_jobs(tmp_path):
         assert (runner._panel_dir("demo_A_C2") / "queries.json").exists()
     finally:
         runner.close()
+
+
+def test_panel_experiment_profiler_writes_artifacts(tmp_path):
+    profiler = PanelExperimentProfiler(
+        output_root=tmp_path / "profiling",
+        run_id="demo-profile",
+        sample_interval_seconds=0.01,
+    )
+
+    profiler.start()
+    profiler.record_stage(
+        "checkpoint_load",
+        "start",
+        source="pytest",
+        details={"label": "synthetic"},
+    )
+    profiler.record_stage(
+        "checkpoint_load",
+        "end",
+        source="pytest",
+        details={"duration_seconds": 0.25},
+    )
+    artifacts = profiler.stop()
+
+    assert artifacts.events_path.exists()
+    assert artifacts.summary_path.exists()
+    assert artifacts.timeline_svg_path.exists()
+    assert artifacts.samples_path.exists() or artifacts.samples_path.parent.exists()
+
+    summary = json.loads(artifacts.summary_path.read_text(encoding="utf-8"))
+    assert summary["event_count"] >= 2
+    assert summary["wall_seconds"] >= 0.0
