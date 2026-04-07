@@ -4,6 +4,7 @@ import os
 import shutil
 import subprocess
 import sys
+from subprocess import CalledProcessError
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -216,17 +217,28 @@ def install_rosetta_subset(
         if python_executable is not None
         else Path(sys.executable).resolve()
     )
-    return subprocess.run(
-        [
-            str(resolved_python),
-            str(script_path),
-            "--archive",
-            str(archive_path.resolve()),
-            "--install-root",
-            str(resolved_install_root),
-        ],
-        cwd=repo_root,
-        capture_output=True,
-        text=True,
-        check=True,
-    )
+    command = [
+        str(resolved_python),
+        str(script_path),
+        "--archive",
+        str(archive_path.resolve()),
+        "--install-root",
+        str(resolved_install_root),
+    ]
+    try:
+        return subprocess.run(
+            command,
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except CalledProcessError as exc:
+        stdout_tail = exc.stdout[-4000:] if exc.stdout else ""
+        stderr_tail = exc.stderr[-4000:] if exc.stderr else ""
+        raise RuntimeError(
+            "Rosetta subset install failed.\n"
+            f"command: {' '.join(command)}\n"
+            f"stdout_tail:\n{stdout_tail}\n"
+            f"stderr_tail:\n{stderr_tail}"
+        ) from exc
