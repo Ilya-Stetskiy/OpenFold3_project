@@ -186,6 +186,8 @@ def test_load_foldx_panel_visual_rows_reads_summary_json(tmp_path: Path) -> None
             '"from_residue": "D",'
             '"to_residue": "A",'
             f'"mutant_structure_path": "{mut_path}",'
+            '"foldx_binding_ddg_kcal_mol": -1.25,'
+            '"foldx_stability_ddg_kcal_mol": -0.75,'
             '"foldx_score_kcal_mol": -1.25'
             '}'
             ']'
@@ -199,6 +201,8 @@ def test_load_foldx_panel_visual_rows_reads_summary_json(tmp_path: Path) -> None
     assert len(rows) == 1
     assert rows[0].wt_structure_path == wt_path
     assert rows[0].foldx_mutant_model_path == mut_path
+    assert rows[0].foldx_binding_ddg_kcal_mol == -1.25
+    assert rows[0].foldx_stability_ddg_kcal_mol == -0.75
 
 
 def test_render_foldx_structure_comparison_html_handles_missing_files() -> None:
@@ -211,6 +215,8 @@ def test_render_foldx_structure_comparison_html_handles_missing_files() -> None:
             to_residue="A",
             wt_structure_path=None,
             foldx_mutant_model_path=None,
+            foldx_binding_ddg_kcal_mol=-1.25,
+            foldx_stability_ddg_kcal_mol=-0.75,
             foldx_score_kcal_mol=-1.25,
         )
     )
@@ -241,6 +247,8 @@ def test_preview_foldx_panel_input_uses_resolved_chain_length(
             "sequence_length": 194,
             "sequence_positions": tuple(range(1, 195)),
             "residue_ids": tuple(str(i) for i in range(1, 195)),
+            "residue_min_partner_distances": tuple(float(i) for i in range(1, 195)),
+            "residue_is_interface": tuple(i <= 10 for i in range(1, 195)),
             "first_residue_id": "1",
             "last_residue_id": "194",
         }
@@ -262,6 +270,7 @@ def test_preview_foldx_panel_input_uses_resolved_chain_length(
     )
 
     assert summary["sequence_length"] == 194
+    assert summary["interface_positions"] == 10
     assert positions[0] == 1
     assert positions[-1] == 194
 
@@ -288,6 +297,8 @@ def test_preview_foldx_panel_input_exposes_residue_ids(
             "sequence_length": 3,
             "sequence_positions": (1, 2, 3),
             "residue_ids": ("333", "334", "335"),
+            "residue_min_partner_distances": (4.0, 12.0, 6.5),
+            "residue_is_interface": (True, False, True),
             "first_residue_id": "333",
             "last_residue_id": "335",
         }
@@ -309,3 +320,4 @@ def test_preview_foldx_panel_input_exposes_residue_ids(
     )
 
     assert list(preview_df["residue_id"]) == ["333", "334", "335"]
+    assert list(preview_df["is_interface_8a"]) == [True, False, True]

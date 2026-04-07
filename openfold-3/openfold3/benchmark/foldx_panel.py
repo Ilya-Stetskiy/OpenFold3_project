@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import csv
+import io
 import json
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
-from contextlib import nullcontext
+from contextlib import nullcontext, redirect_stderr, redirect_stdout
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -29,6 +30,8 @@ class FoldxPanelMutationRow:
     to_residue: str
     mutation_id: str
     local_edit_status: str
+    foldx_binding_ddg_kcal_mol: float | None
+    foldx_stability_ddg_kcal_mol: float | None
     foldx_score_kcal_mol: float | None
     runtime_seconds: float | None
     failure_reason: str | None
@@ -44,6 +47,12 @@ class FoldxPanelRunResult:
     summary_json_path: Path
     rows_csv_path: Path
     ranking_csv_path: Path
+
+
+RANKING_METRICS = {
+    "binding_ddg": "foldx_binding_ddg_kcal_mol",
+    "stability_ddg": "foldx_stability_ddg_kcal_mol",
+}
 
 
 def _slug_case_id(value: str) -> str:
@@ -123,17 +132,62 @@ def build_foldx_panel_mutations(
     return resolved.source_path, resolved.pdb_id, mutations
 
 
-def _extract_foldx_score(payload: dict[str, Any]) -> float | None:
+def _resolve_ranking_metric_name(ranking_metric: str) -> str:
+    resolved = RANKING_METRICS.get(ranking_metric)
+    if resolved is None:
+        supported = ", ".join(sorted(RANKING_METRICS))
+        raise ValueError(
+            f"Unsupported ranking_metric {ranking_metric!r}. Expected one of: {supported}"
+        )
+    return resolved
+
+
+def _extract_foldx_result(payload: dict[str, Any]) -> dict[str, Any] | None:
     report = payload.get("harness_report") or {}
     results = report.get("results") or []
     for result in results:
         if result.get("method") == "foldx":
-            score = result.get("score")
-            return None if score is None else float(score)
+            return result
     return None
 
 
-def _row_from_payload(payload: dict[str, Any]) -> FoldxPanelMutationRow:
+def _extract_foldx_metrics(payload: dict[str, Any]) -> tuple[float | None, float | None]:
+    result = _extract_foldx_result(payload)
+    if result is None:
+        return None, None
+    details = result.get("details") or {}
+    binding_ddg = None
+    mutant_interaction = details.get("mutant_interaction_energy")
+    wt_interaction = details.get("wt_interaction_energy")
+    if mutant_interaction is not None and wt_interaction is not None:
+        binding_ddg = float(mutant_interaction) - float(wt_interaction)
+    elif result.get("score") is not None:
+        binding_ddg = float(result["score"])
+    stability_ddg = details.get("buildmodel_total_energy_change")
+    return (
+        binding_ddg,
+        None if stability_ddg is None else float(stability_ddg),
+    )
+
+
+def _row_score(
+    *,
+    binding_ddg: float | None,
+    stability_ddg: float | None,
+    ranking_metric_name: str,
+) -> float | None:
+    metric_values = {
+        "foldx_binding_ddg_kcal_mol": binding_ddg,
+        "foldx_stability_ddg_kcal_mol": stability_ddg,
+    }
+    return metric_values[ranking_metric_name]
+
+
+def _row_from_payload(
+    payload: dict[str, Any],
+    *,
+    ranking_metric_name: str,
+) -> FoldxPanelMutationRow:
     mutation = payload["mutation"]
     mutation_id = mutation.get("mutation_id")
     if mutation_id is None:
@@ -144,6 +198,7 @@ def _row_from_payload(payload: dict[str, Any]) -> FoldxPanelMutationRow:
     row_pdb_id = None
     if payload.get("source_kind") == "pdb_id":
         row_pdb_id = Path(str(payload["source_path"])).stem.upper()
+    binding_ddg, stability_ddg = _extract_foldx_metrics(payload)
     return FoldxPanelMutationRow(
         case_id=str(payload["case_id"]),
         pdb_id=row_pdb_id,
@@ -153,7 +208,13 @@ def _row_from_payload(payload: dict[str, Any]) -> FoldxPanelMutationRow:
         to_residue=str(mutation["to_residue"]),
         mutation_id=str(mutation_id),
         local_edit_status=str(payload["local_edit_status"]),
-        foldx_score_kcal_mol=_extract_foldx_score(payload),
+        foldx_binding_ddg_kcal_mol=binding_ddg,
+        foldx_stability_ddg_kcal_mol=stability_ddg,
+        foldx_score_kcal_mol=_row_score(
+            binding_ddg=binding_ddg,
+            stability_ddg=stability_ddg,
+            ranking_metric_name=ranking_metric_name,
+        ),
         runtime_seconds=(
             None
             if payload.get("runtime_seconds") is None
@@ -166,12 +227,16 @@ def _row_from_payload(payload: dict[str, Any]) -> FoldxPanelMutationRow:
     )
 
 
-def _load_cached_row(case_root: Path) -> FoldxPanelMutationRow | None:
+def _load_cached_row(
+    case_root: Path,
+    *,
+    ranking_metric_name: str,
+) -> FoldxPanelMutationRow | None:
     result_path = case_root / "local_edit_result.json"
     if not result_path.exists():
         return None
     payload = json.loads(result_path.read_text(encoding="utf-8"))
-    return _row_from_payload(payload)
+    return _row_from_payload(payload, ranking_metric_name=ranking_metric_name)
 
 
 def _write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
@@ -203,7 +268,11 @@ def _progress_bar(*, total: int, enabled: bool, description: str):
     return tqdm(total=total, desc=description, unit="mutation", dynamic_ncols=True)
 
 
-def _ranking_rows(rows: list[FoldxPanelMutationRow]) -> list[dict[str, Any]]:
+def _ranking_rows(
+    rows: list[FoldxPanelMutationRow],
+    *,
+    ranking_metric: str,
+) -> list[dict[str, Any]]:
     ok_rows = [row for row in rows if row.local_edit_status == "ok" and row.foldx_score_kcal_mol is not None]
     ordered = sorted(
         ok_rows,
@@ -220,6 +289,9 @@ def _ranking_rows(rows: list[FoldxPanelMutationRow]) -> list[dict[str, Any]]:
                 "position_1based": row.position_1based,
                 "from_residue": row.from_residue,
                 "to_residue": row.to_residue,
+                "ranking_metric": ranking_metric,
+                "foldx_binding_ddg_kcal_mol": row.foldx_binding_ddg_kcal_mol,
+                "foldx_stability_ddg_kcal_mol": row.foldx_stability_ddg_kcal_mol,
                 "foldx_score_kcal_mol": row.foldx_score_kcal_mol,
                 "mutant_structure_path": row.mutant_structure_path,
                 "report_path": row.report_path,
@@ -238,15 +310,16 @@ def _run_mutation_payload(
     session: requests.Session | None,
     harness: DdgBenchmarkHarness | None,
 ) -> dict[str, Any]:
-    result = run_local_mutation_case(
-        mutation=mutation,
-        work_dir=cases_root,
-        structure_path=source_path,
-        case_id=case_id,
-        cache_dir=cache_dir,
-        session=session,
-        harness=harness,
-    )
+    with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+        result = run_local_mutation_case(
+            mutation=mutation,
+            work_dir=cases_root,
+            structure_path=source_path,
+            case_id=case_id,
+            cache_dir=cache_dir,
+            session=session,
+            harness=harness,
+        )
     return json.loads(
         (result.report_path.parent / "local_edit_result.json").read_text(encoding="utf-8")
     )
@@ -264,12 +337,14 @@ def run_foldx_panel(
     harness: DdgBenchmarkHarness | None = None,
     show_progress: bool = True,
     num_workers: int | None = 1,
+    ranking_metric: str = "stability_ddg",
 ) -> FoldxPanelRunResult:
     output_root = Path(output_root).expanduser().resolve()
     output_root.mkdir(parents=True, exist_ok=True)
     cases_root = output_root / "cases"
     cases_root.mkdir(parents=True, exist_ok=True)
     resolved_num_workers = _resolve_num_workers(num_workers)
+    ranking_metric_name = _resolve_ranking_metric_name(ranking_metric)
 
     source_path, resolved_pdb_id, mutations = build_foldx_panel_mutations(
         structure_path=structure_path,
@@ -287,7 +362,7 @@ def run_foldx_panel(
             f"{(resolved_pdb_id or Path(source_path).stem).lower()}_{mutation.mutation_id.lower()}"
         )
         case_root = cases_root / case_id
-        cached = _load_cached_row(case_root)
+        cached = _load_cached_row(case_root, ranking_metric_name=ranking_metric_name)
         if cached is not None:
             rows_by_case_id[case_id] = cached
             continue
@@ -312,7 +387,10 @@ def run_foldx_panel(
                     session=session,
                     harness=harness,
                 )
-                rows_by_case_id[case_id] = _row_from_payload(payload)
+                rows_by_case_id[case_id] = _row_from_payload(
+                    payload,
+                    ranking_metric_name=ranking_metric_name,
+                )
                 if progress is not None:
                     progress.update(1)
         else:
@@ -335,7 +413,10 @@ def run_foldx_panel(
                     future_to_case_id[future] = case_id
                 for future in as_completed(future_to_case_id):
                     case_id = future_to_case_id[future]
-                    rows_by_case_id[case_id] = _row_from_payload(future.result())
+                    rows_by_case_id[case_id] = _row_from_payload(
+                        future.result(),
+                        ranking_metric_name=ranking_metric_name,
+                    )
                     if progress is not None:
                         progress.update(1)
 
@@ -346,12 +427,13 @@ def run_foldx_panel(
         rows.append(rows_by_case_id[case_id])
 
     row_dicts = [asdict(row) for row in rows]
-    ranking_rows = _ranking_rows(rows)
+    ranking_rows = _ranking_rows(rows, ranking_metric=ranking_metric)
     summary_payload = {
         "pdb_id": resolved_pdb_id,
         "source_path": str(source_path),
         "chain_id": chain_id,
         "positions": list(positions),
+        "ranking_metric": ranking_metric,
         "num_workers": resolved_num_workers,
         "total_mutations": len(rows),
         "successful_mutations": sum(row.local_edit_status == "ok" for row in rows),

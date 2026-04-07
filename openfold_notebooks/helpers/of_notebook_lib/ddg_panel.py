@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import sqlite3
 import sys
 from dataclasses import dataclass
@@ -53,6 +54,8 @@ class FoldxPanelVisualRow:
     to_residue: str
     wt_structure_path: Path | None
     foldx_mutant_model_path: Path | None
+    foldx_binding_ddg_kcal_mol: float | None
+    foldx_stability_ddg_kcal_mol: float | None
     foldx_score_kcal_mol: float | None
 
 
@@ -152,8 +155,14 @@ def resolve_foldx_chain_context(
     sequence = extract_protein_sequence(resolved.source_path, mutable_chain_id)
     residue_ids: list[str] = []
     sequence_positions: list[int] = []
+    residue_min_partner_distances: list[float | None] = []
+    residue_is_interface: list[bool] = []
     seen: set[tuple[str, str]] = set()
-    for atom in parse_structure_records(resolved.source_path):
+    all_atoms = parse_structure_records(resolved.source_path)
+    partner_atoms = [
+        atom for atom in all_atoms if atom.chain_id != mutable_chain_id
+    ]
+    for atom in all_atoms:
         key = (atom.chain_id, atom.residue_id)
         if key in seen or atom.chain_id != mutable_chain_id:
             continue
@@ -162,6 +171,24 @@ def resolve_foldx_chain_context(
             continue
         sequence_positions.append(len(sequence_positions) + 1)
         residue_ids.append(str(atom.residue_id))
+        residue_atoms = [
+            residue_atom
+            for residue_atom in all_atoms
+            if residue_atom.chain_id == mutable_chain_id
+            and residue_atom.residue_id == atom.residue_id
+        ]
+        min_distance = None if not partner_atoms else min(
+            math.dist(
+                (left.x, left.y, left.z),
+                (right.x, right.y, right.z),
+            )
+            for left in residue_atoms
+            for right in partner_atoms
+        )
+        residue_min_partner_distances.append(min_distance)
+        residue_is_interface.append(
+            min_distance is not None and min_distance <= 8.0
+        )
     return {
         "source_path": resolved.source_path,
         "pdb_id": resolved.pdb_id,
@@ -170,6 +197,8 @@ def resolve_foldx_chain_context(
         "sequence_length": len(sequence),
         "sequence_positions": tuple(sequence_positions),
         "residue_ids": tuple(residue_ids),
+        "residue_min_partner_distances": tuple(residue_min_partner_distances),
+        "residue_is_interface": tuple(residue_is_interface),
         "first_residue_id": None if not residue_ids else residue_ids[0],
         "last_residue_id": None if not residue_ids else residue_ids[-1],
     }
@@ -376,6 +405,16 @@ def load_foldx_panel_visual_rows(summary_json_path: str | Path) -> list[FoldxPan
                     if row.get("mutant_structure_path") is None
                     else Path(str(row["mutant_structure_path"]))
                 ),
+                foldx_binding_ddg_kcal_mol=(
+                    None
+                    if row.get("foldx_binding_ddg_kcal_mol") is None
+                    else float(row["foldx_binding_ddg_kcal_mol"])
+                ),
+                foldx_stability_ddg_kcal_mol=(
+                    None
+                    if row.get("foldx_stability_ddg_kcal_mol") is None
+                    else float(row["foldx_stability_ddg_kcal_mol"])
+                ),
                 foldx_score_kcal_mol=(
                     None
                     if row.get("foldx_score_kcal_mol") is None
@@ -490,8 +529,19 @@ def render_foldx_structure_comparison_html(
     )
     label = f"{row.chain_id}:{row.from_residue}{row.position_1based}{row.to_residue}"
     score_text = "NA" if row.foldx_score_kcal_mol is None else f"{row.foldx_score_kcal_mol:.4f}"
+    binding_text = (
+        "NA"
+        if row.foldx_binding_ddg_kcal_mol is None
+        else f"{row.foldx_binding_ddg_kcal_mol:.4f}"
+    )
+    stability_text = (
+        "NA"
+        if row.foldx_stability_ddg_kcal_mol is None
+        else f"{row.foldx_stability_ddg_kcal_mol:.4f}"
+    )
     return (
-        f"<div><p><strong>{label}</strong> FoldX score={score_text} kcal/mol</p>"
+        f"<div><p><strong>{label}</strong> selected={score_text} kcal/mol; "
+        f"binding={binding_text}; stability={stability_text}</p>"
         f"<div style='display:flex; gap:16px; align-items:flex-start;'>"
         f"<div style='flex:1'>{wt_html}</div>"
         f"<div style='flex:1'>{foldx_html}</div>"
@@ -577,14 +627,38 @@ def preview_foldx_panel_input(
             strict=True,
         )
     }
+    interface_by_position = {
+        int(position): bool(is_interface)
+        for position, is_interface in zip(
+            chain_context["sequence_positions"],
+            chain_context["residue_is_interface"],
+            strict=True,
+        )
+    }
+    min_distance_by_position = {
+        int(position): (
+            None if min_distance is None else float(min_distance)
+        )
+        for position, min_distance in zip(
+            chain_context["sequence_positions"],
+            chain_context["residue_min_partner_distances"],
+            strict=True,
+        )
+    }
     if not preview_df.empty:
         preview_df["residue_id"] = preview_df["position_1based"].map(residue_id_by_position)
+        preview_df["is_interface_8a"] = preview_df["position_1based"].map(interface_by_position)
+        preview_df["min_partner_atom_distance_a"] = preview_df["position_1based"].map(
+            min_distance_by_position
+        )
         preview_df = preview_df[
             [
                 "target_id",
                 "chain_id",
                 "position_1based",
                 "residue_id",
+                "is_interface_8a",
+                "min_partner_atom_distance_a",
                 "wt_residue",
                 "mutation_panel",
                 "mutant_count",
@@ -608,6 +682,7 @@ def preview_foldx_panel_input(
             "resolved_structure_path": str(chain_context["source_path"]),
             "first_residue_id": chain_context["first_residue_id"],
             "last_residue_id": chain_context["last_residue_id"],
+            "interface_positions": sum(bool(value) for value in chain_context["residue_is_interface"]),
         },
         positions,
     )

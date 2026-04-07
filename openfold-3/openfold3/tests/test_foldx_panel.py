@@ -10,8 +10,14 @@ from openfold3.benchmark.harness import DdgBenchmarkHarness, MethodResult
 class _MappedFoldxMethod:
     name = "foldx"
 
-    def __init__(self, mutant_by_case_id: dict[str, tuple[Path, float]]):
+    def __init__(
+        self,
+        mutant_by_case_id: dict[str, tuple[Path, float]],
+        *,
+        buildmodel_delta_by_case_id: dict[str, float] | None = None,
+    ):
         self.mutant_by_case_id = mutant_by_case_id
+        self.buildmodel_delta_by_case_id = buildmodel_delta_by_case_id or {}
 
     def run(self, context):
         mutant_model_path, score = self.mutant_by_case_id[context.case.case_id]
@@ -24,6 +30,11 @@ class _MappedFoldxMethod:
                 "prepared_from_cif": False,
                 "runtime_seconds": 0.01,
                 "mutant_model_path": str(mutant_model_path),
+                "mutant_interaction_energy": score,
+                "wt_interaction_energy": 0.0,
+                "buildmodel_total_energy_change": self.buildmodel_delta_by_case_id.get(
+                    context.case.case_id
+                ),
             },
         )
 
@@ -85,17 +96,23 @@ def test_run_foldx_panel_writes_rows_ranking_and_resume(tmp_path: Path) -> None:
     _write_two_chain_complex(mutant_b, chain_b="NE")
 
     cases = {}
+    buildmodel_deltas = {}
     for residue in "ACDEFGHIKLMNPQRSTVWY":
         if residue == "D":
             continue
         case_id = f"wt_b_d201{residue.lower()}"
         if residue == "A":
             cases[case_id] = (mutant_a, -1.0)
+            buildmodel_deltas[case_id] = -0.3
         elif residue == "N":
             cases[case_id] = (mutant_b, 0.5)
+            buildmodel_deltas[case_id] = 0.4
         else:
             cases[case_id] = (mutant_a, 1.0)
-    harness = DdgBenchmarkHarness(methods=[_MappedFoldxMethod(cases)])
+            buildmodel_deltas[case_id] = 1.2
+    harness = DdgBenchmarkHarness(
+        methods=[_MappedFoldxMethod(cases, buildmodel_delta_by_case_id=buildmodel_deltas)]
+    )
 
     result = run_foldx_panel(
         output_root=tmp_path / "run",
@@ -105,6 +122,7 @@ def test_run_foldx_panel_writes_rows_ranking_and_resume(tmp_path: Path) -> None:
         cache_dir=tmp_path / "cache",
         session=None,
         harness=harness,
+        ranking_metric="stability_ddg",
     )
 
     resumed = run_foldx_panel(
@@ -113,6 +131,7 @@ def test_run_foldx_panel_writes_rows_ranking_and_resume(tmp_path: Path) -> None:
         chain_id="B",
         positions=(1,),
         harness=harness,
+        ranking_metric="stability_ddg",
     )
 
     assert result.summary_json_path.exists()
@@ -120,9 +139,11 @@ def test_run_foldx_panel_writes_rows_ranking_and_resume(tmp_path: Path) -> None:
     assert resumed.rows_csv_path.exists()
     assert resumed.ranking_csv_path.exists()
     payload = json.loads(resumed.summary_json_path.read_text(encoding="utf-8"))
+    assert payload["ranking_metric"] == "stability_ddg"
     assert payload["total_mutations"] == 19
     assert payload["successful_mutations"] == 19
     assert payload["ranking"][0]["mutation_id"] == "B_D201A"
+    assert payload["ranking"][0]["foldx_stability_ddg_kcal_mol"] == -0.3
 
 
 def test_run_foldx_panel_parallel_workers(tmp_path: Path) -> None:
@@ -145,9 +166,11 @@ def test_run_foldx_panel_parallel_workers(tmp_path: Path) -> None:
         positions=(1,),
         harness=harness,
         num_workers=4,
+        ranking_metric="binding_ddg",
     )
 
     payload = json.loads(result.summary_json_path.read_text(encoding="utf-8"))
+    assert payload["ranking_metric"] == "binding_ddg"
     assert payload["num_workers"] == 4
     assert payload["total_mutations"] == 19
     assert len(result.rows) == 19
