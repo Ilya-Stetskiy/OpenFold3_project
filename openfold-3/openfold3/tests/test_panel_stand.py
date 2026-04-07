@@ -285,3 +285,131 @@ def test_panel_stand_prepare_inputs_returns_prepare_payload(tmp_path, monkeypatc
             assert row["msa_status"] == "done"
     finally:
         runner.close()
+
+
+def test_panel_stand_resume_reaches_panel_batch_dispatch(tmp_path, monkeypatch):
+    wt_query_json = tmp_path / "wt_query.json"
+    wt_query_json.write_text(
+        json.dumps(
+            {
+                "seeds": [42],
+                "queries": {
+                    "wt": {
+                        "chains": [
+                            {
+                                "molecule_type": "protein",
+                                "chain_ids": ["A"],
+                                "sequence": "ACDE",
+                            }
+                        ]
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    config = PanelStandConfig(
+        target_id="demo",
+        wt_query_json=wt_query_json,
+        output_root=tmp_path / "out",
+        mutable_chain_id="A",
+        positions=(2,),
+        predict_panel_chunk_size=1,
+    )
+    runner = PanelDdgStandRunner(config)
+    try:
+        def fake_ensure_wt(wt_query_id, wt_query):
+            runner.db.upsert_wt("demo", wt_query_id)
+            wt_msa_dir = runner._wt_dir() / "msa"
+            wt_msa_dir.mkdir(parents=True, exist_ok=True)
+            wt_query_msa_json = wt_msa_dir / "query_msa.json"
+            wt_query_msa_json.write_text(
+                json.dumps(
+                    {
+                        "seeds": [42],
+                        "queries": {
+                            wt_query_id: {
+                                "chains": [
+                                    {
+                                        "molecule_type": "protein",
+                                        "chain_ids": ["A"],
+                                        "sequence": "ACDE",
+                                        "main_msa_file_paths": [str(wt_msa_dir)],
+                                    }
+                                ]
+                            }
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            runner.db.set_wt_stage("demo", "msa", "done", msa_dir=wt_msa_dir, msa_query_json=wt_query_msa_json)
+            predict_dir = runner._wt_dir() / "predict"
+            predict_dir.mkdir(parents=True, exist_ok=True)
+            struct_path = predict_dir / "wt_model.cif"
+            conf_path = predict_dir / "wt_conf.json"
+            struct_path.write_text("data", encoding="utf-8")
+            conf_path.write_text("{}", encoding="utf-8")
+            runner.db.set_wt_stage(
+                "demo",
+                "predict",
+                "done",
+                predict_dir=predict_dir,
+                structure_path=struct_path,
+                confidence_path=conf_path,
+            )
+            runner.db.set_wt_stage(
+                "demo",
+                "analysis",
+                "done",
+                wt_report_path=runner.output_root / "wt_report.json",
+                rosetta_score=0.0,
+            )
+
+        calls = {"batch": 0}
+
+        monkeypatch.setattr(runner, "_ensure_wt", fake_ensure_wt)
+        def fake_ensure_panel_msa(panel, base_query, wt_query_msa_json=None):
+            panel_dir = runner._panel_dir(panel.panel_id)
+            runner.db.upsert_panel("demo", panel, panel_dir)
+            msa_dir = panel_dir / "msa"
+            msa_dir.mkdir(parents=True, exist_ok=True)
+            panel_query_msa = msa_dir / "query_msa.json"
+            panel_query_msa.write_text(
+                json.dumps(
+                    {
+                        "seeds": [42],
+                        "queries": {
+                            job_id: {
+                                "chains": [
+                                    {
+                                        "molecule_type": "protein",
+                                        "chain_ids": ["A"],
+                                        "sequence": "AADE",
+                                        "main_msa_file_paths": [str(msa_dir)],
+                                    }
+                                ]
+                            }
+                            for job_id in panel.job_ids
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            runner.db.set_panel_stage(
+                panel.panel_id,
+                "msa",
+                "done",
+                msa_query_json=panel_query_msa,
+                last_error=None,
+            )
+            return True
+
+        monkeypatch.setattr(runner, "_ensure_panel_msa", fake_ensure_panel_msa)
+        monkeypatch.setattr(runner, "_predict_panel_batch", lambda panel_ids: calls.__setitem__("batch", calls["batch"] + 1) or {"panel_ids": list(panel_ids), "job_ids": runner._job_ids_for_panels(panel_ids), "predict_total_seconds": 0.0, "checkpoint_load_seconds": 0.0, "gpu_inference_seconds": 0.0})
+        monkeypatch.setattr(runner, "_wait_for_analysis_completion", lambda job_ids, poll_seconds=0.2: None)
+        payload = runner.run_predict_and_analysis()
+        assert payload["run_mode"] == "resume"
+        assert calls["batch"] >= 1
+    finally:
+        runner.close()

@@ -1481,56 +1481,56 @@ class PanelDdgStandRunner:
                     pending_after_warmup.extend(ready_for_predict)
                     ready_for_predict.clear()
 
-            ready_for_predict: list[str] = []
-            if self.config.msa_panel_workers <= 1:
-                for index, panel in enumerate(panels, start=1):
-                    self._log(f"[msa {index}/{len(panels)}] {panel.panel_id}")
-                    if self._ensure_panel_msa(
+        ready_for_predict: list[str] = []
+        if self.config.msa_panel_workers <= 1:
+            for index, panel in enumerate(panels, start=1):
+                self._log(f"[msa {index}/{len(panels)}] {panel.panel_id}")
+                if self._ensure_panel_msa(
+                    panel,
+                    wt_query,
+                    wt_query_msa_json=wt_query_msa_json,
+                ):
+                    _dispatch_or_buffer_ready_panel(panel.panel_id)
+        else:
+            from concurrent.futures import ThreadPoolExecutor, as_completed
+
+            with ThreadPoolExecutor(
+                max_workers=max(1, self.config.msa_panel_workers)
+            ) as executor:
+                futures = {
+                    executor.submit(
+                        self._ensure_panel_msa,
                         panel,
                         wt_query,
                         wt_query_msa_json=wt_query_msa_json,
-                    ):
+                    ): panel
+                    for panel in panels
+                }
+                for future in as_completed(futures):
+                    panel = futures[future]
+                    if future.result():
                         _dispatch_or_buffer_ready_panel(panel.panel_id)
-            else:
-                from concurrent.futures import ThreadPoolExecutor, as_completed
 
-                with ThreadPoolExecutor(
-                    max_workers=max(1, self.config.msa_panel_workers)
-                ) as executor:
-                    futures = {
-                        executor.submit(
-                            self._ensure_panel_msa,
-                            panel,
-                            wt_query,
-                            wt_query_msa_json=wt_query_msa_json,
-                        ): panel
-                        for panel in panels
-                    }
-                    for future in as_completed(futures):
-                        panel = futures[future]
-                        if future.result():
-                            _dispatch_or_buffer_ready_panel(panel.panel_id)
+        if chosen_predict_mode is None:
+            chosen_predict_mode = "single_batch"
 
-            if chosen_predict_mode is None:
-                chosen_predict_mode = "single_batch"
-
-            if chosen_predict_mode == "single_batch":
-                remaining_panel_ids = list(pending_after_warmup) + list(ready_for_predict)
-                if remaining_panel_ids:
-                    self._log(
-                        f"[predict batch] launching single remaining batch for {len(remaining_panel_ids)} panels"
-                    )
-                    self._predict_panel_batch(remaining_panel_ids)
-            elif ready_for_predict:
+        if chosen_predict_mode == "single_batch":
+            remaining_panel_ids = list(pending_after_warmup) + list(ready_for_predict)
+            if remaining_panel_ids:
                 self._log(
-                    f"[predict batch] launching final chunk for {len(ready_for_predict)} panels"
+                    f"[predict batch] launching single remaining batch for {len(remaining_panel_ids)} panels"
                 )
-                self._predict_panel_batch(ready_for_predict)
-            self._drain_deferred_analysis_jobs()
-            for _ in analysis_threads:
-                self.analysis_queue.put(None)
-            for thread in analysis_threads:
-                thread.join()
+                self._predict_panel_batch(remaining_panel_ids)
+        elif ready_for_predict:
+            self._log(
+                f"[predict batch] launching final chunk for {len(ready_for_predict)} panels"
+            )
+            self._predict_panel_batch(ready_for_predict)
+        self._drain_deferred_analysis_jobs()
+        for _ in analysis_threads:
+            self.analysis_queue.put(None)
+        for thread in analysis_threads:
+            thread.join()
         return (
             panels,
             chosen_predict_mode,
