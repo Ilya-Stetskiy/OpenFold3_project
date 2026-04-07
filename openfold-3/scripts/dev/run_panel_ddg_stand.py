@@ -88,10 +88,16 @@ def main() -> None:
     parser.add_argument("--msa-panel-workers", type=int, default=1)
     parser.add_argument("--analysis-workers", type=int, default=4)
     parser.add_argument(
+        "--predict-strategy",
+        choices=("adaptive", "chunked", "single_batch"),
+        default="adaptive",
+        help="Adaptive compares warmup GPU predict vs CPU analysis and then chooses chunked overlap or one remaining predict batch",
+    )
+    parser.add_argument(
         "--predict-panel-chunk-size",
         type=int,
         default=8,
-        help="Panels per predict batch; smaller chunks allow CPU analysis to overlap with later GPU batches",
+        help="Warmup and chunk size in panels; used for chunked mode and the first adaptive probe batch",
     )
     parser.add_argument(
         "--enable-profiling",
@@ -139,6 +145,7 @@ def main() -> None:
         num_model_seeds=args.num_model_seeds,
         msa_panel_workers=args.msa_panel_workers,
         analysis_workers=args.analysis_workers,
+        predict_strategy=args.predict_strategy,
         predict_panel_chunk_size=args.predict_panel_chunk_size,
         enable_profiling=args.enable_profiling,
         profiling_sample_interval_seconds=args.profiling_sample_interval_seconds,

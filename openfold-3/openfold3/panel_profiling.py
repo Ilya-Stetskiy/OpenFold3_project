@@ -620,6 +620,56 @@ class PanelExperimentProfiler:
         self._previous_cpu_ticks: dict[int, tuple[float, float]] = {}
         self._gpu_collector = _NvidiaSmiCollector()
 
+    def relative_seconds(self) -> float:
+        return time.perf_counter() - self._started_wall
+
+    def stage_duration_seconds(
+        self,
+        stage: str,
+        *,
+        source: str | None = None,
+        since_relative_seconds: float | None = None,
+        until_relative_seconds: float | None = None,
+    ) -> float | None:
+        with self._lock:
+            events = list(self._events)
+        matching = [
+            row
+            for row in events
+            if row.get("stage") == stage
+            and (source is None or row.get("source") == source)
+            and (
+                since_relative_seconds is None
+                or float(row.get("relative_seconds", 0.0)) >= since_relative_seconds
+            )
+            and (
+                until_relative_seconds is None
+                or float(row.get("relative_seconds", 0.0)) <= until_relative_seconds
+            )
+        ]
+        if not matching:
+            return None
+        explicit = [
+            float(row["duration_seconds"])
+            for row in matching
+            if row.get("event") == "end" and row.get("duration_seconds") is not None
+        ]
+        if explicit:
+            return max(explicit)
+        starts = [
+            float(row["relative_seconds"])
+            for row in matching
+            if row.get("event") == "start" and row.get("relative_seconds") is not None
+        ]
+        ends = [
+            float(row["relative_seconds"])
+            for row in matching
+            if row.get("event") == "end" and row.get("relative_seconds") is not None
+        ]
+        if not starts or not ends:
+            return None
+        return max(0.0, max(ends) - min(starts))
+
     def start(self) -> None:
         self.output_root.mkdir(parents=True, exist_ok=True)
         self.record_stage("experiment_total", "start", source="profiler")
