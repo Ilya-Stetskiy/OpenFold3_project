@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import csv
 import json
+from concurrent.futures import Future, ThreadPoolExecutor, as_completed
+from contextlib import nullcontext
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -183,14 +185,22 @@ def _write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
         writer.writerows(rows)
 
 
-def _progress_iter(items: list[MutationInput], *, enabled: bool, description: str):
+def _resolve_num_workers(num_workers: int | None) -> int:
+    if num_workers is None:
+        return 1
+    if num_workers < 1:
+        raise ValueError(f"num_workers must be >= 1, got {num_workers}")
+    return num_workers
+
+
+def _progress_bar(*, total: int, enabled: bool, description: str):
     if not enabled:
-        return items
+        return nullcontext(None)
     try:
         from tqdm.auto import tqdm
     except Exception:
-        return items
-    return tqdm(items, desc=description, unit="mutation")
+        return nullcontext(None)
+    return tqdm(total=total, desc=description, unit="mutation")
 
 
 def _ranking_rows(rows: list[FoldxPanelMutationRow]) -> list[dict[str, Any]]:
@@ -218,6 +228,30 @@ def _ranking_rows(rows: list[FoldxPanelMutationRow]) -> list[dict[str, Any]]:
     return ranking
 
 
+def _run_mutation_payload(
+    *,
+    mutation: MutationInput,
+    cases_root: Path,
+    source_path: Path,
+    case_id: str,
+    cache_dir: str | Path | None,
+    session: requests.Session | None,
+    harness: DdgBenchmarkHarness | None,
+) -> dict[str, Any]:
+    result = run_local_mutation_case(
+        mutation=mutation,
+        work_dir=cases_root,
+        structure_path=source_path,
+        case_id=case_id,
+        cache_dir=cache_dir,
+        session=session,
+        harness=harness,
+    )
+    return json.loads(
+        (result.report_path.parent / "local_edit_result.json").read_text(encoding="utf-8")
+    )
+
+
 def run_foldx_panel(
     *,
     output_root: str | Path,
@@ -229,11 +263,13 @@ def run_foldx_panel(
     session: requests.Session | None = None,
     harness: DdgBenchmarkHarness | None = None,
     show_progress: bool = True,
+    num_workers: int | None = 1,
 ) -> FoldxPanelRunResult:
     output_root = Path(output_root).expanduser().resolve()
     output_root.mkdir(parents=True, exist_ok=True)
     cases_root = output_root / "cases"
     cases_root.mkdir(parents=True, exist_ok=True)
+    resolved_num_workers = _resolve_num_workers(num_workers)
 
     source_path, resolved_pdb_id, mutations = build_foldx_panel_mutations(
         structure_path=structure_path,
@@ -244,31 +280,70 @@ def run_foldx_panel(
         session=session,
     )
 
-    rows: list[FoldxPanelMutationRow] = []
-    for mutation in _progress_iter(
-        mutations,
-        enabled=show_progress,
-        description=f"FoldX {chain_id} panel",
-    ):
+    rows_by_case_id: dict[str, FoldxPanelMutationRow] = {}
+    uncached_jobs: list[tuple[str, MutationInput]] = []
+    for mutation in mutations:
         case_id = _slug_case_id(
             f"{(resolved_pdb_id or Path(source_path).stem).lower()}_{mutation.mutation_id.lower()}"
         )
         case_root = cases_root / case_id
         cached = _load_cached_row(case_root)
         if cached is not None:
-            rows.append(cached)
+            rows_by_case_id[case_id] = cached
             continue
-        result = run_local_mutation_case(
-            mutation=mutation,
-            work_dir=cases_root,
-            structure_path=source_path,
-            case_id=case_id,
-            cache_dir=cache_dir,
-            session=session,
-            harness=harness,
+        uncached_jobs.append((case_id, mutation))
+
+    rows: list[FoldxPanelMutationRow] = []
+    with _progress_bar(
+        total=len(mutations),
+        enabled=show_progress,
+        description=f"FoldX {chain_id} panel",
+    ) as progress:
+        if progress is not None and rows_by_case_id:
+            progress.update(len(rows_by_case_id))
+        if resolved_num_workers == 1 or len(uncached_jobs) <= 1:
+            for case_id, mutation in uncached_jobs:
+                payload = _run_mutation_payload(
+                    mutation=mutation,
+                    cases_root=cases_root,
+                    source_path=source_path,
+                    case_id=case_id,
+                    cache_dir=cache_dir,
+                    session=session,
+                    harness=harness,
+                )
+                rows_by_case_id[case_id] = _row_from_payload(payload)
+                if progress is not None:
+                    progress.update(1)
+        else:
+            future_to_case_id: dict[Future[dict[str, Any]], str] = {}
+            with ThreadPoolExecutor(
+                max_workers=min(resolved_num_workers, len(uncached_jobs)),
+                thread_name_prefix="foldx-panel",
+            ) as executor:
+                for case_id, mutation in uncached_jobs:
+                    future = executor.submit(
+                        _run_mutation_payload,
+                        mutation=mutation,
+                        cases_root=cases_root,
+                        source_path=source_path,
+                        case_id=case_id,
+                        cache_dir=cache_dir,
+                        session=session,
+                        harness=harness,
+                    )
+                    future_to_case_id[future] = case_id
+                for future in as_completed(future_to_case_id):
+                    case_id = future_to_case_id[future]
+                    rows_by_case_id[case_id] = _row_from_payload(future.result())
+                    if progress is not None:
+                        progress.update(1)
+
+    for mutation in mutations:
+        case_id = _slug_case_id(
+            f"{(resolved_pdb_id or Path(source_path).stem).lower()}_{mutation.mutation_id.lower()}"
         )
-        payload = json.loads((result.report_path.parent / "local_edit_result.json").read_text(encoding="utf-8"))
-        rows.append(_row_from_payload(payload))
+        rows.append(rows_by_case_id[case_id])
 
     row_dicts = [asdict(row) for row in rows]
     ranking_rows = _ranking_rows(rows)
@@ -277,6 +352,7 @@ def run_foldx_panel(
         "source_path": str(source_path),
         "chain_id": chain_id,
         "positions": list(positions),
+        "num_workers": resolved_num_workers,
         "total_mutations": len(rows),
         "successful_mutations": sum(row.local_edit_status == "ok" for row in rows),
         "rows": row_dicts,

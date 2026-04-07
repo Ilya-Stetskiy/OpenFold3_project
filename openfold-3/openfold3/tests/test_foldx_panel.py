@@ -123,3 +123,31 @@ def test_run_foldx_panel_writes_rows_ranking_and_resume(tmp_path: Path) -> None:
     assert payload["total_mutations"] == 19
     assert payload["successful_mutations"] == 19
     assert payload["ranking"][0]["mutation_id"] == "B_D201A"
+
+
+def test_run_foldx_panel_parallel_workers(tmp_path: Path) -> None:
+    structure_path = tmp_path / "wt_parallel.pdb"
+    mutant_a = tmp_path / "mut_parallel_a.pdb"
+    _write_two_chain_complex(structure_path, chain_b="DE")
+    _write_two_chain_complex(mutant_a, chain_b="AE")
+
+    cases = {
+        f"wt_parallel_b_d201{residue.lower()}": (mutant_a, float(index))
+        for index, residue in enumerate("ACDEFGHIKLMNPQRSTVWY", start=1)
+        if residue != "D"
+    }
+    harness = DdgBenchmarkHarness(methods=[_MappedFoldxMethod(cases)])
+
+    result = run_foldx_panel(
+        output_root=tmp_path / "parallel_run",
+        structure_path=structure_path,
+        chain_id="B",
+        positions=(1,),
+        harness=harness,
+        num_workers=4,
+    )
+
+    payload = json.loads(result.summary_json_path.read_text(encoding="utf-8"))
+    assert payload["num_workers"] == 4
+    assert payload["total_mutations"] == 19
+    assert len(result.rows) == 19
