@@ -10,7 +10,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from .cif_utils import parse_structure_records
+from .cif_utils import parse_structure_records, write_pdb_atom_records
 from .harness import HarnessContext, MethodResult
 
 
@@ -200,43 +200,8 @@ def _resolve_foldx_output_path(
     )
 
 
-def _element_from_atom_name(atom_name: str) -> str:
-    letters = "".join(char for char in atom_name if char.isalpha())
-    if not letters:
-        return "X"
-    if len(letters) >= 2 and letters[0].upper() == "H":
-        return "H"
-    return letters[0].upper()
-
-
 def _write_atom_records_to_pdb(structure_path: Path, pdb_path: Path) -> None:
-    atoms = parse_structure_records(structure_path)
-    lines: list[str] = []
-    serial = 1
-    previous_chain = None
-    for atom in atoms:
-        if previous_chain is not None and atom.chain_id != previous_chain:
-            lines.append("TER")
-        previous_chain = atom.chain_id
-        atom_name = atom.atom_name[:4]
-        res_name = atom.residue_name[:3]
-        chain_id = (atom.chain_id or "?")[:1]
-        residue_token = atom.residue_id
-        digits = "".join(char for char in residue_token if char.isdigit()) or "1"
-        insertion = next((char for char in residue_token if char.isalpha()), " ")
-        x = atom.x
-        y = atom.y
-        z = atom.z
-        b_factor = 0.0 if atom.b_factor is None else atom.b_factor
-        element = _element_from_atom_name(atom.atom_name)
-        lines.append(
-            f"ATOM  {serial:5d} {atom_name:>4} {res_name:>3} {chain_id}{int(digits):4d}{insertion:1}"
-            f"   {x:8.3f}{y:8.3f}{z:8.3f}{1.00:6.2f}{b_factor:6.2f}          {element:>2}"
-        )
-        serial += 1
-    lines.append("TER")
-    lines.append("END")
-    pdb_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    write_pdb_atom_records(pdb_path, parse_structure_records(structure_path))
 
 
 def _prepare_local_pdb_copy(structure_path: Path, work_dir: Path) -> tuple[Path, bool, float]:

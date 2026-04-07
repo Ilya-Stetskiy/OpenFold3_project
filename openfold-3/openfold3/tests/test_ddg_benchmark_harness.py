@@ -6,6 +6,7 @@ from openfold3.benchmark.cif_utils import (
     parse_atom_site_records,
     parse_pdb_atom_records,
     summarize_structure,
+    write_pdb_atom_records,
 )
 from openfold3.benchmark.harness import DdgBenchmarkHarness, MethodResult
 from openfold3.benchmark.methods import (
@@ -300,6 +301,24 @@ def test_foldx_buildmodel_runs_for_local_cif(tmp_path):
     assert report.results[0].status == "ok"
     assert report.results[0].details["prepared_from_cif"] is True
     assert Path(report.results[0].details["prepared_input_pdb_path"]).exists()
+
+
+def test_prepare_local_pdb_copy_uses_shared_pdb_writer_for_cif(tmp_path):
+    structure_path = tmp_path / "mini.cif"
+    expected_pdb_path = tmp_path / "expected.pdb"
+    work_dir = tmp_path / "prepared"
+    work_dir.mkdir()
+    _write_foldx_ready_cif(structure_path)
+
+    write_pdb_atom_records(expected_pdb_path, parse_atom_site_records(structure_path))
+    prepared_pdb_path, prepared_from_cif, _ = benchmark_methods._prepare_local_pdb_copy(
+        structure_path, work_dir
+    )
+
+    assert prepared_from_cif is True
+    assert prepared_pdb_path.read_text(encoding="utf-8") == expected_pdb_path.read_text(
+        encoding="utf-8"
+    )
 
 
 def test_resolve_rosetta_binary_and_database_prefer_environment_override(tmp_path, monkeypatch):
