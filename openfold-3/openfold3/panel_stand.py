@@ -928,6 +928,47 @@ class PanelDdgStandRunner:
             self.db.set_wt_stage(self.config.target_id, "analysis", "failed", last_error=str(exc))
             raise
 
+    def _ensure_wt_msa_only(self, wt_query_id: str, wt_query: Query) -> Path:
+        self.db.upsert_wt(self.config.target_id, wt_query_id)
+        wt_query_json = self._write_wt_query_json(wt_query_id, wt_query)
+        wt_dir = self._wt_dir()
+        msa_dir = wt_dir / "msa"
+        try:
+            if not (msa_dir / "query_msa.json").exists():
+                if self.profiler is not None:
+                    self.profiler.record_stage("wt_msa", "start", source="panel_stand")
+                self.db.set_wt_stage(
+                    self.config.target_id,
+                    "msa",
+                    "running",
+                    msa_dir=msa_dir,
+                )
+                query_msa_json = self._align_msa(wt_query_json, msa_dir, "wt")
+                self.db.set_wt_stage(
+                    self.config.target_id,
+                    "msa",
+                    "done",
+                    msa_dir=msa_dir,
+                    msa_query_json=query_msa_json,
+                    last_error=None,
+                )
+                if self.profiler is not None:
+                    self.profiler.record_stage("wt_msa", "end", source="panel_stand")
+                return query_msa_json
+            query_msa_json = msa_dir / "query_msa.json"
+            self.db.set_wt_stage(
+                self.config.target_id,
+                "msa",
+                "done",
+                msa_dir=msa_dir,
+                msa_query_json=query_msa_json,
+                last_error=None,
+            )
+            return query_msa_json
+        except Exception as exc:
+            self.db.set_wt_stage(self.config.target_id, "msa", "failed", last_error=str(exc))
+            raise
+
     def _ensure_panel_msa(
         self,
         panel: MutationPanel,
@@ -1308,11 +1349,7 @@ class PanelDdgStandRunner:
 
     def prepare_inputs(self) -> dict[str, Any]:
         wt_query_id, wt_query, panels = self._build_panels()
-        self._ensure_wt(wt_query_id, wt_query)
-        wt_row = self.db.fetch_wt(self.config.target_id)
-        if wt_row is None or wt_row["msa_query_json"] is None:
-            raise RuntimeError("WT MSA stage did not produce msa_query_json")
-        wt_query_msa_json = Path(wt_row["msa_query_json"])
+        wt_query_msa_json = self._ensure_wt_msa_only(wt_query_id, wt_query)
         for panel in panels:
             self.db.upsert_panel(
                 self.config.target_id,

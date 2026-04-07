@@ -243,7 +243,7 @@ def test_panel_stand_prepare_inputs_returns_prepare_payload(tmp_path, monkeypatc
     )
     runner = PanelDdgStandRunner(config)
     try:
-        def fake_ensure_wt(wt_query_id, wt_query):
+        def fake_ensure_wt_msa_only(wt_query_id, wt_query):
             runner.db.upsert_wt("demo", wt_query_id)
             wt_msa_dir = runner._wt_dir() / "msa"
             wt_msa_dir.mkdir(parents=True, exist_ok=True)
@@ -268,15 +268,15 @@ def test_panel_stand_prepare_inputs_returns_prepare_payload(tmp_path, monkeypatc
                 ),
                 encoding="utf-8",
             )
-            runner.db.set_wt_stage(
-                "demo",
-                "msa",
-                "done",
-                msa_dir=wt_msa_dir,
-                msa_query_json=wt_query_msa_json,
-            )
+            runner.db.set_wt_stage("demo", "msa", "done", msa_dir=wt_msa_dir, msa_query_json=wt_query_msa_json)
+            return wt_query_msa_json
 
-        monkeypatch.setattr(runner, "_ensure_wt", fake_ensure_wt)
+        monkeypatch.setattr(runner, "_ensure_wt_msa_only", fake_ensure_wt_msa_only)
+        monkeypatch.setattr(
+            runner,
+            "_predict",
+            lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("prepare must not predict")),
+        )
         payload = runner.prepare_inputs()
         assert payload["run_mode"] == "prepare"
         assert payload["panel_count"] == 2
