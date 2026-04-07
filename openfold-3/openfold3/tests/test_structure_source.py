@@ -146,3 +146,14 @@ def test_extract_protein_sequence_reads_chain_sequence(tmp_path: Path) -> None:
 
     assert extract_protein_sequence(structure_path, "A") == "L"
     assert extract_protein_sequence(structure_path, "B") == "L"
+
+
+def test_extract_protein_sequence_ignores_terminal_caps_in_mmcif_fixture() -> None:
+    structure_path = (
+        Path(__file__).resolve().parent / "test_data" / "mmcifs" / "1kd8.cif"
+    )
+
+    sequence = extract_protein_sequence(structure_path, "A")
+
+    assert sequence.startswith("EVKQ")
+    assert "ACE" not in sequence

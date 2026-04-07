@@ -178,6 +178,28 @@ def _read_foldx_total_energy(path: Path) -> float:
     return float(row["total energy"])
 
 
+def _resolve_foldx_output_path(
+    output_dir: Path,
+    *,
+    prefix: str,
+    suffix: str,
+) -> Path:
+    exact_path = output_dir / f"{prefix}_{suffix}_AC.fxout"
+    if exact_path.exists():
+        return exact_path
+    fallback_patterns = (
+        f"{prefix}_{suffix}.fxout",
+        f"{prefix}_{suffix}_*.fxout",
+    )
+    for pattern in fallback_patterns:
+        matches = sorted(output_dir.glob(pattern))
+        if matches:
+            return matches[0]
+    raise FileNotFoundError(
+        f"Could not resolve FoldX output for {prefix=} {suffix=} in {output_dir}"
+    )
+
+
 def _element_from_atom_name(atom_name: str) -> str:
     letters = "".join(char for char in atom_name if char.isalpha())
     if not letters:
@@ -515,8 +537,16 @@ class FoldXBuildModelMethod:
                     f"AnalyseComplex failed for {pdb_name}: "
                     f"{process.stdout[-1000:]} {process.stderr[-1000:]}"
                 )
-            summary_path = output_dir / f"Summary_{suffix}_AC.fxout"
-            interaction_path = output_dir / f"Interaction_{suffix}_AC.fxout"
+            summary_path = _resolve_foldx_output_path(
+                output_dir,
+                prefix="Summary",
+                suffix=suffix,
+            )
+            interaction_path = _resolve_foldx_output_path(
+                output_dir,
+                prefix="Interaction",
+                suffix=suffix,
+            )
             return _read_foldx_first_row(summary_path), summary_path, interaction_path, runtime
 
         try:

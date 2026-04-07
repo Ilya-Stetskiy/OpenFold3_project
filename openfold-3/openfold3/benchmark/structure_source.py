@@ -212,9 +212,7 @@ def extract_protein_sequence(
             continue
         residue_name_1 = CANONICAL_AA_3_TO_1.get(residue_name_3)
         if residue_name_1 is None:
-            raise ValueError(
-                f"Encountered non-canonical residue {residue_name_3} in chain {chain_id}"
-            )
+            continue
         sequence.append(residue_name_1)
     if not sequence:
         raise ValueError(f"Could not find protein residues for chain {chain_id}")
