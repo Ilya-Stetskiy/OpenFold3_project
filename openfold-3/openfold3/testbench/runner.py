@@ -6,6 +6,7 @@ from pathlib import Path
 from openfold3.benchmark.harness import DdgBenchmarkHarness, HarnessReport
 from openfold3.benchmark.methods import default_methods
 from openfold3.benchmark.models import BenchmarkCase, MutationInput
+from openfold3.benchmark.structure_source import resolve_structure_source
 
 from .evaluation import EvaluationSummary, evaluate_reports
 from .models import DatasetKind, TestbenchConfig
@@ -31,7 +32,12 @@ def _parse_mutation_payload(payload: dict[str, object]) -> MutationInput:
     )
 
 
-def load_cases_from_json(path: Path) -> list[BenchmarkCase]:
+def load_cases_from_json(
+    path: Path,
+    *,
+    structure_cache_dir: str | Path | None = None,
+    session=None,
+) -> list[BenchmarkCase]:
     payload = json.loads(path.read_text(encoding="utf-8"))
     raw_cases = payload["cases"] if isinstance(payload, dict) and "cases" in payload else payload
     cases: list[BenchmarkCase] = []
@@ -41,10 +47,16 @@ def load_cases_from_json(path: Path) -> list[BenchmarkCase]:
             for mutation_payload in item.get("mutations", [])
         )
         chain_groups = tuple(tuple(group) for group in item.get("chain_groups", []))
+        resolved_source = resolve_structure_source(
+            structure_path=item.get("structure_path"),
+            pdb_id=item.get("pdb_id"),
+            cache_dir=structure_cache_dir,
+            session=session,
+        )
         cases.append(
             BenchmarkCase(
                 case_id=item["case_id"],
-                structure_path=Path(item["structure_path"]),
+                structure_path=resolved_source.source_path,
                 confidence_path=(
                     None
                     if item.get("confidence_path") is None
@@ -54,6 +66,7 @@ def load_cases_from_json(path: Path) -> list[BenchmarkCase]:
                 chain_groups=chain_groups,
                 experimental_ddg=item.get("experimental_ddg"),
                 notes=item.get("notes"),
+                pdb_id=resolved_source.pdb_id,
             )
         )
     return cases

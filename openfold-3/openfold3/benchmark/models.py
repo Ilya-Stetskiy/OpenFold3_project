@@ -28,6 +28,7 @@ class BenchmarkCase:
     chain_groups: tuple[tuple[str, ...], ...] = ()
     experimental_ddg: float | None = None
     notes: str | None = None
+    pdb_id: str | None = None
 
     def with_resolved_paths(self) -> "BenchmarkCase":
         return BenchmarkCase(
@@ -40,6 +41,7 @@ class BenchmarkCase:
             chain_groups=self.chain_groups,
             experimental_ddg=self.experimental_ddg,
             notes=self.notes,
+            pdb_id=self.pdb_id,
         )
 
 
