@@ -117,6 +117,17 @@ def parse_structure_records(structure_path: Path) -> list[AtomRecord]:
     return parse_atom_site_records(structure_path)
 
 
+def _element_from_atom_name(atom_name: str) -> str:
+    letters = "".join(char for char in atom_name if char.isalpha())
+    if not letters:
+        return ""
+    if len(letters) >= 2 and letters[0].upper() == "H":
+        return "H"
+    if len(letters) >= 2 and letters[:2].upper() in {"ZN", "CL", "NA", "MG", "FE", "CA"}:
+        return letters[:2].upper()
+    return letters[0].upper()
+
+
 def write_pdb_atom_records(pdb_path: Path, atoms: list[AtomRecord]) -> None:
     lines: list[str] = []
     serial = 1
@@ -133,9 +144,11 @@ def write_pdb_atom_records(pdb_path: Path, atoms: list[AtomRecord]) -> None:
         digits = "".join(char for char in residue_token if char.isdigit()) or "1"
         insertion = next((char for char in residue_token if char.isalpha()), " ")
         b_factor = 0.0 if atom.b_factor is None else atom.b_factor
+        element = _element_from_atom_name(atom.atom_name)
         lines.append(
-            f"{record_name:<6}{serial:5d} {atom_name:>4} {res_name:>3} {chain_id}{int(digits):4d}{insertion:1}"
-            f"   {atom.x:8.3f}{atom.y:8.3f}{atom.z:8.3f}{1.00:6.2f}{b_factor:6.2f}          {'':>2}"
+            f"{record_name:<6}{serial:5d} {atom_name:>4}{' ':1}{res_name:>3} {chain_id:1}"
+            f"{int(digits):4d}{insertion:1}   {atom.x:8.3f}{atom.y:8.3f}{atom.z:8.3f}"
+            f"{1.00:6.2f}{b_factor:6.2f}          {element:>2}"
         )
         serial += 1
     lines.append("TER")

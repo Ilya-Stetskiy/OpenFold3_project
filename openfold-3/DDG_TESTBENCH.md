@@ -34,6 +34,10 @@ This repository now contains an initial `openfold3.testbench` scaffold for compa
 - `scripts/dev/summarize_panel_ddg_stand.py`
   Builds consensus/ranking exports from a completed `state.sqlite` panel run.
 
+- `scripts/dev/run_local_mutation_benchmark.py`
+  Runs the local FoldX mutation benchmark over known WT/mutant reference pairs
+  plus cyclic round-trip cases, and writes RMSD-in-Angstrom summaries.
+
 ## Single-case example
 
 ```bash

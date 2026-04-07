@@ -97,7 +97,12 @@ def _write_mutant_structure_with_reference_hetero_atoms(
     mutant_model_path: Path,
     output_path: Path,
 ) -> None:
-    mutant_atoms = parse_structure_records(mutant_model_path)
+    mutant_atoms = [
+        atom
+        for atom in parse_structure_records(mutant_model_path)
+        if str(atom.group_pdb).upper() != "HETATM"
+        and atom.residue_name.upper() in CANONICAL_AA_3_TO_1
+    ]
     reference_hetero_atoms = [
         atom
         for atom in parse_structure_records(source_path)
