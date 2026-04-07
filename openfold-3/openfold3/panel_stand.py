@@ -157,6 +157,7 @@ class PanelStandConfig:
     num_model_seeds: int | None = None
     msa_panel_workers: int = 1
     analysis_workers: int = 4
+    predict_panel_chunk_size: int | None = 8
     cleanup_intermediates: bool = True
     enable_profiling: bool = True
     profiling_sample_interval_seconds: float = 1.0
@@ -730,6 +731,12 @@ class PanelDdgStandRunner:
         for job_id in pending:
             self.analysis_queue.put(job_id)
 
+    def _effective_predict_panel_chunk_size(self, panel_count: int) -> int:
+        configured = self.config.predict_panel_chunk_size
+        if configured is None or configured <= 0:
+            return max(1, panel_count)
+        return max(1, min(configured, panel_count))
+
     def _ensure_wt(self, wt_query_id: str, wt_query: Query) -> None:
         self.db.upsert_wt(self.config.target_id, wt_query_id)
         wt_row = self.db.fetch_wt(self.config.target_id)
@@ -1127,17 +1134,26 @@ class PanelDdgStandRunner:
             ]
             for thread in analysis_threads:
                 thread.start()
+            self.analysis_allowed.set()
 
+            predict_panel_chunk_size = self._effective_predict_panel_chunk_size(len(panels))
+            ready_for_predict: list[str] = []
             if self.config.msa_panel_workers <= 1:
-                ready_panel_ids: list[str] = []
                 for index, panel in enumerate(panels, start=1):
                     self._log(f"[msa {index}/{len(panels)}] {panel.panel_id}")
                     if self._ensure_panel_msa(panel, wt_query):
-                        ready_panel_ids.append(panel.panel_id)
+                        if self._panel_ready_for_predict(panel.panel_id):
+                            ready_for_predict.append(panel.panel_id)
+                        if len(ready_for_predict) >= predict_panel_chunk_size:
+                            chunk = list(ready_for_predict[:predict_panel_chunk_size])
+                            del ready_for_predict[:predict_panel_chunk_size]
+                            self._log(
+                                f"[predict batch] launching chunk for {len(chunk)} panels"
+                            )
+                            self._predict_panel_batch(chunk)
             else:
                 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-                ready_panel_ids = []
                 with ThreadPoolExecutor(
                     max_workers=max(1, self.config.msa_panel_workers)
                 ) as executor:
@@ -1148,19 +1164,21 @@ class PanelDdgStandRunner:
                     for future in as_completed(futures):
                         panel = futures[future]
                         if future.result():
-                            ready_panel_ids.append(panel.panel_id)
+                            if self._panel_ready_for_predict(panel.panel_id):
+                                ready_for_predict.append(panel.panel_id)
+                            if len(ready_for_predict) >= predict_panel_chunk_size:
+                                chunk = list(ready_for_predict[:predict_panel_chunk_size])
+                                del ready_for_predict[:predict_panel_chunk_size]
+                                self._log(
+                                    f"[predict batch] launching chunk for {len(chunk)} panels"
+                                )
+                                self._predict_panel_batch(chunk)
 
-            batch_predict_panel_ids = [
-                panel_id
-                for panel_id in ready_panel_ids
-                if self._panel_ready_for_predict(panel_id)
-            ]
-            if batch_predict_panel_ids:
+            if ready_for_predict:
                 self._log(
-                    f"[predict batch] launching one predict worker for {len(batch_predict_panel_ids)} panels"
+                    f"[predict batch] launching final chunk for {len(ready_for_predict)} panels"
                 )
-                self._predict_panel_batch(batch_predict_panel_ids)
-            self.analysis_allowed.set()
+                self._predict_panel_batch(ready_for_predict)
             self._drain_deferred_analysis_jobs()
             for _ in analysis_threads:
                 self.analysis_queue.put(None)
