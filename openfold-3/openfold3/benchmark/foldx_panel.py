@@ -183,6 +183,16 @@ def _write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
         writer.writerows(rows)
 
 
+def _progress_iter(items: list[MutationInput], *, enabled: bool, description: str):
+    if not enabled:
+        return items
+    try:
+        from tqdm.auto import tqdm
+    except Exception:
+        return items
+    return tqdm(items, desc=description, unit="mutation")
+
+
 def _ranking_rows(rows: list[FoldxPanelMutationRow]) -> list[dict[str, Any]]:
     ok_rows = [row for row in rows if row.local_edit_status == "ok" and row.foldx_score_kcal_mol is not None]
     ordered = sorted(
@@ -218,6 +228,7 @@ def run_foldx_panel(
     cache_dir: str | Path | None = None,
     session: requests.Session | None = None,
     harness: DdgBenchmarkHarness | None = None,
+    show_progress: bool = True,
 ) -> FoldxPanelRunResult:
     output_root = Path(output_root).expanduser().resolve()
     output_root.mkdir(parents=True, exist_ok=True)
@@ -234,7 +245,11 @@ def run_foldx_panel(
     )
 
     rows: list[FoldxPanelMutationRow] = []
-    for mutation in mutations:
+    for mutation in _progress_iter(
+        mutations,
+        enabled=show_progress,
+        description=f"FoldX {chain_id} panel",
+    ):
         case_id = _slug_case_id(
             f"{(resolved_pdb_id or Path(source_path).stem).lower()}_{mutation.mutation_id.lower()}"
         )
