@@ -44,6 +44,18 @@ class PanelVisualRow:
     foldx_mutant_model_path: Path | None
 
 
+@dataclass(frozen=True, slots=True)
+class FoldxPanelVisualRow:
+    case_id: str
+    chain_id: str
+    position_1based: int
+    from_residue: str
+    to_residue: str
+    wt_structure_path: Path | None
+    foldx_mutant_model_path: Path | None
+    foldx_score_kcal_mol: float | None
+
+
 def parse_positions_spec(positions_text: str, *, sequence_length: int) -> tuple[int, ...]:
     values: list[int] = []
     for token in positions_text.replace("\n", ",").split(","):
@@ -169,6 +181,10 @@ def render_info_card(title: str, items: list[tuple[str, object]], *, accent: str
 
 def build_run_name(*, pdb_id: str, mutable_chain_id: str) -> str:
     return f"{normalize_pdb_id(pdb_id).lower()}_{mutable_chain_id.lower()}_ddg_panel"
+
+
+def build_foldx_run_name(*, pdb_id: str, mutable_chain_id: str) -> str:
+    return f"{normalize_pdb_id(pdb_id).lower()}_{mutable_chain_id.lower()}_foldx_panel"
 
 
 def summarize_panel_preview(
@@ -298,6 +314,38 @@ def load_panel_visual_rows(state_db_path: str | Path) -> list[PanelVisualRow]:
     return visual_rows
 
 
+def load_foldx_panel_visual_rows(summary_json_path: str | Path) -> list[FoldxPanelVisualRow]:
+    payload = json.loads(Path(summary_json_path).read_text(encoding="utf-8"))
+    wt_structure_path = (
+        None
+        if payload.get("source_path") is None
+        else Path(str(payload["source_path"]))
+    )
+    rows: list[FoldxPanelVisualRow] = []
+    for row in payload.get("rows", []):
+        rows.append(
+            FoldxPanelVisualRow(
+                case_id=str(row["case_id"]),
+                chain_id=str(row["chain_id"]),
+                position_1based=int(row["position_1based"]),
+                from_residue=str(row["from_residue"]),
+                to_residue=str(row["to_residue"]),
+                wt_structure_path=wt_structure_path,
+                foldx_mutant_model_path=(
+                    None
+                    if row.get("mutant_structure_path") is None
+                    else Path(str(row["mutant_structure_path"]))
+                ),
+                foldx_score_kcal_mol=(
+                    None
+                    if row.get("foldx_score_kcal_mol") is None
+                    else float(row["foldx_score_kcal_mol"])
+                ),
+            )
+        )
+    return rows
+
+
 def _render_structure_view(
     structure_path: Path | None,
     *,
@@ -372,6 +420,41 @@ def render_panel_structure_comparison_html(
         f"<div style='flex:1'>{wt_html}</div>"
         f"<div style='flex:1'>{foldx_html}</div>"
         f"<div style='flex:1'>{mutant_html}</div>"
+        f"</div></div>"
+    )
+
+
+def render_foldx_structure_comparison_html(
+    row: FoldxPanelVisualRow,
+    *,
+    width: int = 460,
+    height: int = 340,
+) -> str:
+    wt_html = _render_structure_view(
+        row.wt_structure_path,
+        title="WT complex",
+        width=width,
+        height=height,
+        chain_id=row.chain_id,
+        position_1based=row.position_1based,
+        missing_message="WT structure is unavailable.",
+    )
+    foldx_html = _render_structure_view(
+        row.foldx_mutant_model_path,
+        title="FoldX mutant",
+        width=width,
+        height=height,
+        chain_id=row.chain_id,
+        position_1based=row.position_1based,
+        missing_message="FoldX mutant structure is unavailable.",
+    )
+    label = f"{row.chain_id}:{row.from_residue}{row.position_1based}{row.to_residue}"
+    score_text = "NA" if row.foldx_score_kcal_mol is None else f"{row.foldx_score_kcal_mol:.4f}"
+    return (
+        f"<div><p><strong>{label}</strong> FoldX score={score_text} kcal/mol</p>"
+        f"<div style='display:flex; gap:16px; align-items:flex-start;'>"
+        f"<div style='flex:1'>{wt_html}</div>"
+        f"<div style='flex:1'>{foldx_html}</div>"
         f"</div></div>"
     )
 

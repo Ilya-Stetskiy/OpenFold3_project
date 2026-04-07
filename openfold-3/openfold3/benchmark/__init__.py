@@ -1,6 +1,12 @@
 """Benchmark helpers for ddG screening harnesses."""
 
 from .harness import DdgBenchmarkHarness, HarnessReport, MethodResult
+from .foldx_panel import (
+    FoldxPanelMutationRow,
+    FoldxPanelRunResult,
+    build_foldx_panel_mutations,
+    run_foldx_panel,
+)
 from .local_edit import (
     LocalEditResult,
     LocalEditSuiteResult,
@@ -22,6 +28,8 @@ __all__ = [
     "BenchmarkCase",
     "CyclicMutationCase",
     "DdgBenchmarkHarness",
+    "FoldxPanelMutationRow",
+    "FoldxPanelRunResult",
     "HarnessReport",
     "LocalEditBenchmarkCaseResult",
     "LocalEditBenchmarkSuiteResult",
@@ -31,8 +39,10 @@ __all__ = [
     "MutationInput",
     "ReferenceMutationCase",
     "ResolvedStructureSource",
+    "build_foldx_panel_mutations",
     "benchmark_cases_for_preset",
     "resolve_structure_source",
+    "run_foldx_panel",
     "run_local_edit_benchmark",
     "run_local_mutation_case",
     "run_local_mutation_suite",

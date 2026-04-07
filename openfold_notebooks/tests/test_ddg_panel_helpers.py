@@ -4,10 +4,13 @@ import sqlite3
 from pathlib import Path
 
 from of_notebook_lib.ddg_panel import (
+    FoldxPanelVisualRow,
     PanelVisualRow,
     build_panel_preview,
+    load_foldx_panel_visual_rows,
     load_panel_visual_rows,
     parse_positions_spec,
+    render_foldx_structure_comparison_html,
     render_panel_structure_comparison_html,
     resolve_positions,
 )
@@ -162,3 +165,54 @@ def test_render_panel_structure_comparison_html_handles_missing_files() -> None:
     assert "WT complex" in html
     assert "FoldX local mutant" in html
     assert "OpenFold mutant complex" in html
+
+
+def test_load_foldx_panel_visual_rows_reads_summary_json(tmp_path: Path) -> None:
+    wt_path = tmp_path / "wt.pdb"
+    mut_path = tmp_path / "mut.pdb"
+    for path in (wt_path, mut_path):
+        path.write_text("ATOM\n", encoding="utf-8")
+    summary_path = tmp_path / "summary.json"
+    summary_path.write_text(
+        (
+            '{'
+            f'"source_path": "{wt_path}",'
+            '"rows": ['
+            '{'
+            '"case_id": "demo_b_d1a",'
+            '"chain_id": "B",'
+            '"position_1based": 1,'
+            '"from_residue": "D",'
+            '"to_residue": "A",'
+            f'"mutant_structure_path": "{mut_path}",'
+            '"foldx_score_kcal_mol": -1.25'
+            '}'
+            ']'
+            '}'
+        ),
+        encoding="utf-8",
+    )
+
+    rows = load_foldx_panel_visual_rows(summary_path)
+
+    assert len(rows) == 1
+    assert rows[0].wt_structure_path == wt_path
+    assert rows[0].foldx_mutant_model_path == mut_path
+
+
+def test_render_foldx_structure_comparison_html_handles_missing_files() -> None:
+    html = render_foldx_structure_comparison_html(
+        FoldxPanelVisualRow(
+            case_id="demo_b_d1a",
+            chain_id="B",
+            position_1based=1,
+            from_residue="D",
+            to_residue="A",
+            wt_structure_path=None,
+            foldx_mutant_model_path=None,
+            foldx_score_kcal_mol=-1.25,
+        )
+    )
+
+    assert "WT complex" in html
+    assert "FoldX mutant" in html

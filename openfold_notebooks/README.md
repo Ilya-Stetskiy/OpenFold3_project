@@ -28,7 +28,7 @@ What each notebook is for:
 - `01_single_complex.ipynb`: run one protein or complex prediction and inspect the best samples.
 - `02_mutation_batch.ipynb`: run a set of point mutations against one base complex and rank the results.
 - `OpenFold3_DDG_Stand.ipynb`: legacy ddG stand notebook restored from the earlier panel-stand workflow.
-- `OpenFold3_FoldX_DDG_Panel.ipynb`: run WT-plus-19-mutants ddG panels over one mutable chain of a two-protein complex from `PDB ID`, with SQLite-backed resume state, consensus summary export, and inline WT/FoldX/OpenFold structure comparison.
+- `OpenFold3_FoldX_DDG_Panel.ipynb`: run a pure FoldX WT-plus-19-mutants panel over one mutable chain of a two-protein complex from `PDB ID`, with resume over cached case outputs, global FoldX ranking, and inline WT/FoldX structure comparison.
 - `OpenFold3_Length_Benchmark.ipynb`: run RMSD-vs-length experiments on real PDB inputs.
 - `OpenFold3_Runtime_Benchmark.ipynb`: profile cold/warm OpenFold3 runtime, CPU/GPU load, and per-case timelines across protein lengths.
 
@@ -67,7 +67,7 @@ Notebook UX:
 - both notebooks write `query.json`, `run_openfold.log`, raw outputs, and a `summary/` folder
 - the single-complex notebook shows a compact best-sample table and a quick interpretation
 - the mutation-batch notebook shows per-sample output, per-mutation summary, and final mutation ranking
-- the FoldX ddG panel notebook writes `state.sqlite`, per-job ddG reports, and a `summary_exports/` folder with consensus ranking tables
+- the FoldX panel notebook writes `summary.json`, `rows.csv`, `ranking.csv`, and one case folder per mutation with cached local FoldX outputs
 - advanced helper API also exposes `run_screened_mutation_case()`, `compare_mutation_batch_case()`, and `run_server_end_to_end_case()`
 - a local low-memory runner config is available at `./configs/low_mem.yml`
 - runtime profiling artifacts now live under `openfold3_runtime_benchmark/runs/<timestamp>/` with `manifest.json`, `case_results.csv`, `events.jsonl`, `samples.jsonl`, SVG plots, and per-case timeline summaries
