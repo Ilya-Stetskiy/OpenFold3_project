@@ -197,10 +197,10 @@ def _progress_bar(*, total: int, enabled: bool, description: str):
     if not enabled:
         return nullcontext(None)
     try:
-        from tqdm.auto import tqdm
+        from tqdm import tqdm
     except Exception:
         return nullcontext(None)
-    return tqdm(total=total, desc=description, unit="mutation")
+    return tqdm(total=total, desc=description, unit="mutation", dynamic_ncols=True)
 
 
 def _ranking_rows(rows: list[FoldxPanelMutationRow]) -> list[dict[str, Any]]:
