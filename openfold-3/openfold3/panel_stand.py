@@ -530,6 +530,8 @@ class PanelDdgStandRunner:
         self._deferred_analysis_job_ids: list[str] = []
         self._deferred_analysis_lock = threading.Lock()
         self._log_lock = threading.Lock()
+        self._predict_batch_lock = threading.Lock()
+        self._predict_batch_index = 0
         self._panel_msa_seconds: dict[str, float] = {}
         self._job_analysis_seconds: dict[str, float] = {}
         self.profiler = (
@@ -596,8 +598,19 @@ class PanelDdgStandRunner:
     def _wt_dir(self) -> Path:
         return self.output_root / "wt"
 
-    def _batched_predict_dir(self) -> Path:
+    def _predict_batch_root_dir(self) -> Path:
         return self.output_root / "predict_batch"
+
+    def _next_batched_predict_dir(self) -> Path:
+        with self._predict_batch_lock:
+            batch_root = self._predict_batch_root_dir()
+            batch_root.mkdir(parents=True, exist_ok=True)
+            while True:
+                self._predict_batch_index += 1
+                candidate = batch_root / f"batch_{self._predict_batch_index:04d}"
+                if candidate.exists():
+                    continue
+                return candidate
 
     def _build_panels(self) -> tuple[str, Query, list[MutationPanel]]:
         wt_query_id, wt_query = _load_single_query(self.config.wt_query_json)
@@ -1023,7 +1036,7 @@ class PanelDdgStandRunner:
                 "checkpoint_load_seconds": None,
                 "gpu_inference_seconds": 0.0,
             }
-        predict_batch_dir = self._batched_predict_dir()
+        predict_batch_dir = self._next_batched_predict_dir()
         predict_batch_dir.mkdir(parents=True, exist_ok=True)
         merged_query_json = predict_batch_dir / "query_msa_merged.json"
         panel_rows: dict[str, sqlite3.Row] = {}

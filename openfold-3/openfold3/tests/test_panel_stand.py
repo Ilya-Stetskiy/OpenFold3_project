@@ -413,3 +413,114 @@ def test_panel_stand_resume_reaches_panel_batch_dispatch(tmp_path, monkeypatch):
         assert calls["batch"] >= 1
     finally:
         runner.close()
+
+
+def test_panel_stand_uses_distinct_dirs_for_sequential_predict_batches(tmp_path, monkeypatch):
+    wt_query_json = tmp_path / "wt_query.json"
+    wt_query_json.write_text(
+        json.dumps(
+            {
+                "seeds": [42],
+                "queries": {
+                    "wt": {
+                        "chains": [
+                            {
+                                "molecule_type": "protein",
+                                "chain_ids": ["A"],
+                                "sequence": "ACDEF",
+                            }
+                        ]
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    config = PanelStandConfig(
+        target_id="demo",
+        wt_query_json=wt_query_json,
+        output_root=tmp_path / "out",
+        mutable_chain_id="A",
+        positions=(2, 3),
+        predict_panel_chunk_size=1,
+    )
+    runner = PanelDdgStandRunner(config)
+    try:
+        _, wt_query, panels = runner._build_panels()
+        for panel in panels:
+            panel_dir = runner._panel_dir(panel.panel_id)
+            runner.db.upsert_panel("demo", panel, panel_dir)
+            msa_dir = panel_dir / "msa"
+            msa_dir.mkdir(parents=True, exist_ok=True)
+            panel_query_msa = msa_dir / "query_msa.json"
+            panel_query_msa.write_text(
+                json.dumps(
+                    {
+                        "seeds": [42],
+                        "queries": {
+                            job_id: {
+                                "chains": [
+                                    {
+                                        "molecule_type": "protein",
+                                        "chain_ids": ["A"],
+                                        "sequence": "AADEF",
+                                        "main_msa_file_paths": [str(msa_dir)],
+                                    }
+                                ]
+                            }
+                            for job_id in panel.job_ids
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            runner.db.set_panel_stage(
+                panel.panel_id,
+                "msa",
+                "done",
+                msa_query_json=panel_query_msa,
+                last_error=None,
+            )
+
+        predict_calls: list[Path] = []
+
+        def fake_predict(query_json: Path, output_dir: Path, label: str) -> Path:
+            assert label == "panel_batch"
+            predict_calls.append(output_dir)
+            summary_path = output_dir / "summary.jsonl"
+            merged = json.loads(query_json.read_text(encoding="utf-8"))
+            rows = []
+            for query_id in merged["queries"]:
+                query_dir = output_dir / query_id / "seed_42"
+                query_dir.mkdir(parents=True, exist_ok=True)
+                confidence_path = query_dir / f"{query_id}_confidences_aggregated.json"
+                model_path = query_dir / f"{query_id}_model.cif"
+                confidence_path.write_text("{}", encoding="utf-8")
+                model_path.write_text("data", encoding="utf-8")
+                rows.append(
+                    {
+                        "query_id": query_id,
+                        "aggregated_confidence_path": str(confidence_path),
+                        "sample_ranking_score": 1.0,
+                    }
+                )
+            summary_path.write_text(
+                "\n".join(json.dumps(row, sort_keys=True) for row in rows) + "\n",
+                encoding="utf-8",
+            )
+            return summary_path
+
+        monkeypatch.setattr(runner, "_predict", fake_predict)
+        monkeypatch.setattr(runner, "_enqueue_analysis_jobs", lambda job_ids: None)
+
+        first = runner._predict_panel_batch([panels[0].panel_id])
+        second = runner._predict_panel_batch([panels[1].panel_id])
+
+        assert first["panel_ids"] == [panels[0].panel_id]
+        assert second["panel_ids"] == [panels[1].panel_id]
+        assert len(predict_calls) == 2
+        assert predict_calls[0] != predict_calls[1]
+        assert predict_calls[0].name == "batch_0001"
+        assert predict_calls[1].name == "batch_0002"
+    finally:
+        runner.close()
