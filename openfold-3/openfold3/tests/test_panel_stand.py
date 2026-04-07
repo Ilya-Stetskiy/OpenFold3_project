@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import json
+from pathlib import Path
 
 from openfold3.panel_stand import PanelDdgStandRunner, PanelStandConfig
 from openfold3.panel_profiling import PanelExperimentProfiler
@@ -135,3 +136,78 @@ def test_panel_experiment_profiler_writes_artifacts(tmp_path):
     summary = json.loads(artifacts.summary_path.read_text(encoding="utf-8"))
     assert summary["event_count"] >= 2
     assert summary["wall_seconds"] >= 0.0
+
+
+def test_panel_stand_reuses_wt_msa_for_mutants(tmp_path, monkeypatch):
+    wt_query_json = tmp_path / "wt_query.json"
+    wt_query_json.write_text(
+        json.dumps(
+            {
+                "seeds": [42],
+                "queries": {
+                    "wt": {
+                        "chains": [
+                            {
+                                "molecule_type": "protein",
+                                "chain_ids": ["A"],
+                                "sequence": "ACDE",
+                            }
+                        ]
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    msa_dir = tmp_path / "wt_msa_assets"
+    msa_dir.mkdir()
+    wt_query_msa_json = tmp_path / "wt_query_msa.json"
+    wt_query_msa_json.write_text(
+        json.dumps(
+            {
+                "seeds": [42],
+                "queries": {
+                    "wt": {
+                        "chains": [
+                            {
+                                "molecule_type": "protein",
+                                "chain_ids": ["A"],
+                                "sequence": "ACDE",
+                                "main_msa_file_paths": [str(msa_dir)],
+                            }
+                        ]
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    config = PanelStandConfig(
+        target_id="demo",
+        wt_query_json=wt_query_json,
+        output_root=tmp_path / "out",
+        mutable_chain_id="A",
+        positions=(2,),
+        reuse_wt_msa_for_mutants=True,
+    )
+    runner = PanelDdgStandRunner(config)
+    try:
+        monkeypatch.setattr(
+            runner,
+            "_align_msa",
+            lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("unexpected align")),
+        )
+        _, wt_query, panels = runner._build_panels()
+        panel = panels[0]
+        runner.db.upsert_panel("demo", panel, runner._panel_dir(panel.panel_id))
+        ok = runner._ensure_panel_msa(panel, wt_query, wt_query_msa_json=wt_query_msa_json)
+        assert ok is True
+        row = runner.db.fetch_panel(panel.panel_id)
+        assert row is not None
+        query_msa_path = Path(row["msa_query_json"])
+        payload = json.loads(query_msa_path.read_text(encoding="utf-8"))
+        mutant_query = payload["queries"]["demo_A_C2A"]
+        assert mutant_query["chains"][0]["sequence"] == "AADE"
+        assert mutant_query["chains"][0]["main_msa_file_paths"] == [str(msa_dir)]
+    finally:
+        runner.close()

@@ -88,6 +88,12 @@ def main() -> None:
     parser.add_argument("--msa-panel-workers", type=int, default=1)
     parser.add_argument("--analysis-workers", type=int, default=4)
     parser.add_argument(
+        "--reuse-wt-msa-for-mutants",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Build WT MSA once and reuse its MSA/template paths for all mutant queries",
+    )
+    parser.add_argument(
         "--predict-strategy",
         choices=("adaptive", "chunked", "single_batch"),
         default="adaptive",
@@ -145,6 +151,7 @@ def main() -> None:
         num_model_seeds=args.num_model_seeds,
         msa_panel_workers=args.msa_panel_workers,
         analysis_workers=args.analysis_workers,
+        reuse_wt_msa_for_mutants=args.reuse_wt_msa_for_mutants,
         predict_strategy=args.predict_strategy,
         predict_panel_chunk_size=args.predict_panel_chunk_size,
         enable_profiling=args.enable_profiling,

@@ -56,6 +56,15 @@ def _load_single_query(query_json: Path) -> tuple[str, Query]:
     return next(iter(query_set.queries.items()))
 
 
+def _load_single_query_set(query_json: Path) -> InferenceQuerySet:
+    query_set = InferenceQuerySet.from_json(query_json)
+    if len(query_set.queries) != 1:
+        raise ValueError(
+            f"Expected exactly one query in {query_json}, got {len(query_set.queries)}"
+        )
+    return query_set
+
+
 def _clone_query(query: Query) -> Query:
     return Query.model_validate(query.model_dump())
 
@@ -157,6 +166,7 @@ class PanelStandConfig:
     num_model_seeds: int | None = None
     msa_panel_workers: int = 1
     analysis_workers: int = 4
+    reuse_wt_msa_for_mutants: bool = True
     predict_strategy: str = "adaptive"
     predict_panel_chunk_size: int | None = 8
     cleanup_intermediates: bool = True
@@ -664,6 +674,40 @@ class PanelDdgStandRunner:
         )
         return query_json
 
+    def _write_panel_query_msa_json(self, wt_query_msa_json: Path, panel: MutationPanel) -> Path:
+        panel_dir = self._panel_dir(panel.panel_id)
+        msa_dir = panel_dir / "msa"
+        msa_dir.mkdir(parents=True, exist_ok=True)
+        query_msa_json = msa_dir / "query_msa.json"
+        if query_msa_json.exists():
+            return query_msa_json
+        wt_query_set = _load_single_query_set(wt_query_msa_json)
+        wt_query = next(iter(wt_query_set.queries.values()))
+        queries: dict[str, Query] = {}
+        for job_id, mutation in zip(panel.job_ids, panel.mutations, strict=True):
+            query = _clone_query(wt_query)
+            for chain in query.chains:
+                if mutation.chain_id in chain.chain_ids and chain.sequence is not None:
+                    chain.sequence = apply_point_mutation(
+                        chain.sequence,
+                        mutation.position_1based,
+                        mutation.to_residue,
+                        expected_residue=mutation.from_residue,
+                    )
+                    break
+            else:
+                raise ValueError(
+                    f"Could not find mutable chain {mutation.chain_id} for panel {panel.panel_id}"
+                )
+            queries[job_id] = query
+        query_msa_json.write_text(
+            InferenceQuerySet(seeds=list(wt_query_set.seeds), queries=queries).model_dump_json(
+                indent=2
+            ),
+            encoding="utf-8",
+        )
+        return query_msa_json
+
     def _align_msa(self, query_json: Path, output_dir: Path, label: str) -> Path:
         output_dir.mkdir(parents=True, exist_ok=True)
         query_msa_json = output_dir / "query_msa.json"
@@ -884,7 +928,13 @@ class PanelDdgStandRunner:
             self.db.set_wt_stage(self.config.target_id, "analysis", "failed", last_error=str(exc))
             raise
 
-    def _ensure_panel_msa(self, panel: MutationPanel, base_query: Query) -> bool:
+    def _ensure_panel_msa(
+        self,
+        panel: MutationPanel,
+        base_query: Query,
+        *,
+        wt_query_msa_json: Path | None = None,
+    ) -> bool:
         panel_dir = self._panel_dir(panel.panel_id)
         query_json = self._write_panel_query_json(base_query, panel)
         self.db.upsert_panel(self.config.target_id, panel, panel_dir)
@@ -899,7 +949,13 @@ class PanelDdgStandRunner:
                 self._log(f"[resume] panel MSA ready {panel.panel_id}")
                 return True
             self.db.set_panel_stage(panel.panel_id, "msa", "running", last_error=None)
-            query_msa_json = self._align_msa(query_json, msa_dir, panel.panel_id)
+            if self.config.reuse_wt_msa_for_mutants:
+                if wt_query_msa_json is None:
+                    raise RuntimeError("WT MSA reuse is enabled but WT query_msa.json is missing")
+                query_msa_json = self._write_panel_query_msa_json(wt_query_msa_json, panel)
+                self._log(f"[msa reuse] panel {panel.panel_id} <- {wt_query_msa_json}")
+            else:
+                query_msa_json = self._align_msa(query_json, msa_dir, panel.panel_id)
             self.db.set_panel_stage(
                 panel.panel_id,
                 "msa",
@@ -1220,6 +1276,10 @@ class PanelDdgStandRunner:
         try:
             wt_query_id, wt_query, panels = self._build_panels()
             self._ensure_wt(wt_query_id, wt_query)
+            wt_row = self.db.fetch_wt(self.config.target_id)
+            if wt_row is None or wt_row["msa_query_json"] is None:
+                raise RuntimeError("WT MSA stage did not produce msa_query_json")
+            wt_query_msa_json = Path(wt_row["msa_query_json"])
             for panel in panels:
                 self.db.upsert_panel(
                     self.config.target_id,
@@ -1305,7 +1365,11 @@ class PanelDdgStandRunner:
             if self.config.msa_panel_workers <= 1:
                 for index, panel in enumerate(panels, start=1):
                     self._log(f"[msa {index}/{len(panels)}] {panel.panel_id}")
-                    if self._ensure_panel_msa(panel, wt_query):
+                    if self._ensure_panel_msa(
+                        panel,
+                        wt_query,
+                        wt_query_msa_json=wt_query_msa_json,
+                    ):
                         _dispatch_or_buffer_ready_panel(panel.panel_id)
             else:
                 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -1314,7 +1378,12 @@ class PanelDdgStandRunner:
                     max_workers=max(1, self.config.msa_panel_workers)
                 ) as executor:
                     futures = {
-                        executor.submit(self._ensure_panel_msa, panel, wt_query): panel
+                        executor.submit(
+                            self._ensure_panel_msa,
+                            panel,
+                            wt_query,
+                            wt_query_msa_json=wt_query_msa_json,
+                        ): panel
                         for panel in panels
                     }
                     for future in as_completed(futures):
