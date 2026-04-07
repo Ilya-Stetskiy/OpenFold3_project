@@ -71,6 +71,12 @@ def main() -> None:
     parser.add_argument("--target-id", required=True)
     parser.add_argument("--wt-query-json", type=Path, required=True)
     parser.add_argument("--output-root", type=Path, required=True)
+    parser.add_argument(
+        "--run-mode",
+        choices=("full", "prepare", "resume"),
+        default="full",
+        help="prepare: CPU-only WT/MSA/panel prep, resume: predict+analysis from prepared state, full: both",
+    )
     parser.add_argument("--mutable-chain-id", required=True)
     parser.add_argument("--positions")
     parser.add_argument("--positions-csv", type=Path)
@@ -160,7 +166,12 @@ def main() -> None:
     )
     runner = PanelDdgStandRunner(config)
     try:
-        payload = runner.run()
+        if args.run_mode == "prepare":
+            payload = runner.prepare_inputs()
+        elif args.run_mode == "resume":
+            payload = runner.run_predict_and_analysis()
+        else:
+            payload = runner.run()
     finally:
         runner.close()
     print(json.dumps(payload, indent=2))

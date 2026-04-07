@@ -1265,101 +1265,184 @@ class PanelDdgStandRunner:
         path.write_text(json.dumps(payload, indent=2, default=_json_default), encoding="utf-8")
         return path
 
-    def run(self) -> dict[str, Any]:
-        profiling_artifacts: PanelProfilingArtifacts | None = None
+    def _build_result_payload(
+        self,
+        *,
+        panels: list[MutationPanel],
+        profiling_artifacts: PanelProfilingArtifacts | None,
+        run_mode: str,
+        chosen_predict_mode: str | None = None,
+        warmup_cpu_seconds: float | None = None,
+        warmup_gpu_seconds: float | None = None,
+        warmup_checkpoint_load_seconds: float | None = None,
+    ) -> dict[str, Any]:
+        summary_path = self._write_summary(profiling_artifacts=profiling_artifacts)
+        return {
+            "run_mode": run_mode,
+            "output_root": str(self.output_root),
+            "state_db": str(self.output_root / "state.sqlite"),
+            "summary_path": str(summary_path),
+            "panel_count": len(panels),
+            "mutant_job_count": sum(len(panel.job_ids) for panel in panels),
+            "predict_strategy_requested": self.config.predict_strategy,
+            "predict_strategy_selected": chosen_predict_mode,
+            "predict_panel_chunk_size": self.config.predict_panel_chunk_size,
+            "warmup_cpu_seconds": warmup_cpu_seconds,
+            "warmup_gpu_seconds": warmup_gpu_seconds,
+            "warmup_checkpoint_load_seconds": warmup_checkpoint_load_seconds,
+            "profiling_summary_path": (
+                None if profiling_artifacts is None else str(profiling_artifacts.summary_path)
+            ),
+            "profiling_events_path": (
+                None if profiling_artifacts is None else str(profiling_artifacts.events_path)
+            ),
+            "profiling_samples_path": (
+                None if profiling_artifacts is None else str(profiling_artifacts.samples_path)
+            ),
+            "profiling_timeline_svg_path": (
+                None
+                if profiling_artifacts is None
+                else str(profiling_artifacts.timeline_svg_path)
+            ),
+        }
+
+    def prepare_inputs(self) -> dict[str, Any]:
+        wt_query_id, wt_query, panels = self._build_panels()
+        self._ensure_wt(wt_query_id, wt_query)
+        wt_row = self.db.fetch_wt(self.config.target_id)
+        if wt_row is None or wt_row["msa_query_json"] is None:
+            raise RuntimeError("WT MSA stage did not produce msa_query_json")
+        wt_query_msa_json = Path(wt_row["msa_query_json"])
+        for panel in panels:
+            self.db.upsert_panel(
+                self.config.target_id,
+                panel,
+                self._panel_dir(panel.panel_id),
+            )
+        if self.config.msa_panel_workers <= 1:
+            for panel in panels:
+                self._log(f"[prepare {panels.index(panel) + 1}/{len(panels)}] {panel.panel_id}")
+                self._ensure_panel_msa(
+                    panel,
+                    wt_query,
+                    wt_query_msa_json=wt_query_msa_json,
+                )
+        else:
+            from concurrent.futures import ThreadPoolExecutor, as_completed
+
+            with ThreadPoolExecutor(
+                max_workers=max(1, self.config.msa_panel_workers)
+            ) as executor:
+                futures = {
+                    executor.submit(
+                        self._ensure_panel_msa,
+                        panel,
+                        wt_query,
+                        wt_query_msa_json=wt_query_msa_json,
+                    ): panel
+                    for panel in panels
+                }
+                for future in as_completed(futures):
+                    future.result()
+        return self._build_result_payload(
+            panels=panels,
+            profiling_artifacts=None,
+            run_mode="prepare",
+        )
+
+    def _run_predict_and_analysis(self) -> tuple[
+        list[MutationPanel], str | None, float | None, float | None, float | None
+    ]:
+        wt_query_id, wt_query, panels = self._build_panels()
+        self._ensure_wt(wt_query_id, wt_query)
+        wt_row = self.db.fetch_wt(self.config.target_id)
+        if wt_row is None or wt_row["msa_query_json"] is None:
+            raise RuntimeError("WT MSA stage did not produce msa_query_json")
+        wt_query_msa_json = Path(wt_row["msa_query_json"])
+        for panel in panels:
+            self.db.upsert_panel(
+                self.config.target_id,
+                panel,
+                self._panel_dir(panel.panel_id),
+            )
+
         chosen_predict_mode: str | None = None
         warmup_cpu_seconds: float | None = None
         warmup_gpu_seconds: float | None = None
         warmup_checkpoint_load_seconds: float | None = None
-        if self.profiler is not None:
-            self.profiler.start()
-        try:
-            wt_query_id, wt_query, panels = self._build_panels()
-            self._ensure_wt(wt_query_id, wt_query)
-            wt_row = self.db.fetch_wt(self.config.target_id)
-            if wt_row is None or wt_row["msa_query_json"] is None:
-                raise RuntimeError("WT MSA stage did not produce msa_query_json")
-            wt_query_msa_json = Path(wt_row["msa_query_json"])
-            for panel in panels:
-                self.db.upsert_panel(
-                    self.config.target_id,
-                    panel,
-                    self._panel_dir(panel.panel_id),
-                )
+        analysis_threads = [
+            threading.Thread(target=self._analysis_worker, daemon=True)
+            for _ in range(max(1, self.config.analysis_workers))
+        ]
+        for thread in analysis_threads:
+            thread.start()
+        self.analysis_allowed.set()
 
-            analysis_threads = [
-                threading.Thread(target=self._analysis_worker, daemon=True)
-                for _ in range(max(1, self.config.analysis_workers))
-            ]
-            for thread in analysis_threads:
-                thread.start()
-            self.analysis_allowed.set()
+        predict_panel_chunk_size = self._effective_predict_panel_chunk_size(len(panels))
+        pending_after_warmup: list[str] = []
+        warmup_chunk_dispatched = False
 
-            predict_panel_chunk_size = self._effective_predict_panel_chunk_size(len(panels))
-            pending_after_warmup: list[str] = []
-            warmup_chunk_dispatched = False
-
-            def _dispatch_or_buffer_ready_panel(panel_id: str) -> None:
-                nonlocal warmup_chunk_dispatched
-                nonlocal chosen_predict_mode
-                nonlocal warmup_cpu_seconds
-                nonlocal warmup_gpu_seconds
-                nonlocal warmup_checkpoint_load_seconds
-                if not self._panel_ready_for_predict(panel_id):
-                    return
-                if chosen_predict_mode == "single_batch":
-                    pending_after_warmup.append(panel_id)
-                    return
-                ready_for_predict.append(panel_id)
-                if warmup_chunk_dispatched and chosen_predict_mode == "chunked":
-                    if len(ready_for_predict) >= predict_panel_chunk_size:
-                        chunk = list(ready_for_predict[:predict_panel_chunk_size])
-                        del ready_for_predict[:predict_panel_chunk_size]
-                        self._log(
-                            f"[predict batch] launching chunk for {len(chunk)} panels"
-                        )
-                        self._predict_panel_batch(chunk)
-                    return
-                if not warmup_chunk_dispatched and len(ready_for_predict) >= predict_panel_chunk_size:
-                    first_chunk = list(ready_for_predict[:predict_panel_chunk_size])
+        def _dispatch_or_buffer_ready_panel(panel_id: str) -> None:
+            nonlocal warmup_chunk_dispatched
+            nonlocal chosen_predict_mode
+            nonlocal warmup_cpu_seconds
+            nonlocal warmup_gpu_seconds
+            nonlocal warmup_checkpoint_load_seconds
+            if not self._panel_ready_for_predict(panel_id):
+                return
+            if chosen_predict_mode == "single_batch":
+                pending_after_warmup.append(panel_id)
+                return
+            ready_for_predict.append(panel_id)
+            if warmup_chunk_dispatched and chosen_predict_mode == "chunked":
+                if len(ready_for_predict) >= predict_panel_chunk_size:
+                    chunk = list(ready_for_predict[:predict_panel_chunk_size])
                     del ready_for_predict[:predict_panel_chunk_size]
-                    first_chunk_job_ids = self._job_ids_for_panels(first_chunk)
-                    warmup_msa_seconds = sum(
-                        float(self._panel_msa_seconds.get(chunk_panel_id, 0.0))
-                        for chunk_panel_id in first_chunk
-                    )
                     self._log(
-                        f"[predict warmup] launching first chunk for {len(first_chunk)} panels"
+                        f"[predict batch] launching chunk for {len(chunk)} panels"
                     )
-                    predict_metrics = self._predict_panel_batch(first_chunk)
-                    analysis_started = time.perf_counter()
-                    self._wait_for_analysis_completion(first_chunk_job_ids)
-                    warmup_analysis_seconds = time.perf_counter() - analysis_started
-                    warmup_checkpoint_load_seconds = predict_metrics["checkpoint_load_seconds"]
-                    checkpoint_load_value = (
-                        0.0
-                        if warmup_checkpoint_load_seconds is None
-                        else float(warmup_checkpoint_load_seconds)
-                    )
-                    warmup_gpu_seconds = float(predict_metrics["gpu_inference_seconds"])
-                    warmup_cpu_seconds = (
-                        warmup_msa_seconds + checkpoint_load_value + warmup_analysis_seconds
-                    )
-                    chosen_predict_mode = self._select_predict_mode(
-                        first_chunk_cpu_seconds=warmup_cpu_seconds,
-                        first_chunk_gpu_seconds=warmup_gpu_seconds,
-                    )
-                    warmup_chunk_dispatched = True
-                    self._log(
-                        "[predict strategy] "
-                        f"{chosen_predict_mode} "
-                        f"(warmup cpu={warmup_cpu_seconds:.2f}s, "
-                        f"gpu={warmup_gpu_seconds:.2f}s, "
-                        f"checkpoint_load={checkpoint_load_value:.2f}s)"
-                    )
-                    if chosen_predict_mode == "single_batch":
-                        pending_after_warmup.extend(ready_for_predict)
-                        ready_for_predict.clear()
+                    self._predict_panel_batch(chunk)
+                return
+            if not warmup_chunk_dispatched and len(ready_for_predict) >= predict_panel_chunk_size:
+                first_chunk = list(ready_for_predict[:predict_panel_chunk_size])
+                del ready_for_predict[:predict_panel_chunk_size]
+                first_chunk_job_ids = self._job_ids_for_panels(first_chunk)
+                warmup_msa_seconds = sum(
+                    float(self._panel_msa_seconds.get(chunk_panel_id, 0.0))
+                    for chunk_panel_id in first_chunk
+                )
+                self._log(
+                    f"[predict warmup] launching first chunk for {len(first_chunk)} panels"
+                )
+                predict_metrics = self._predict_panel_batch(first_chunk)
+                analysis_started = time.perf_counter()
+                self._wait_for_analysis_completion(first_chunk_job_ids)
+                warmup_analysis_seconds = time.perf_counter() - analysis_started
+                warmup_checkpoint_load_seconds = predict_metrics["checkpoint_load_seconds"]
+                checkpoint_load_value = (
+                    0.0
+                    if warmup_checkpoint_load_seconds is None
+                    else float(warmup_checkpoint_load_seconds)
+                )
+                warmup_gpu_seconds = float(predict_metrics["gpu_inference_seconds"])
+                warmup_cpu_seconds = (
+                    warmup_msa_seconds + checkpoint_load_value + warmup_analysis_seconds
+                )
+                chosen_predict_mode = self._select_predict_mode(
+                    first_chunk_cpu_seconds=warmup_cpu_seconds,
+                    first_chunk_gpu_seconds=warmup_gpu_seconds,
+                )
+                warmup_chunk_dispatched = True
+                self._log(
+                    "[predict strategy] "
+                    f"{chosen_predict_mode} "
+                    f"(warmup cpu={warmup_cpu_seconds:.2f}s, "
+                    f"gpu={warmup_gpu_seconds:.2f}s, "
+                    f"checkpoint_load={checkpoint_load_value:.2f}s)"
+                )
+                if chosen_predict_mode == "single_batch":
+                    pending_after_warmup.extend(ready_for_predict)
+                    ready_for_predict.clear()
 
             ready_for_predict: list[str] = []
             if self.config.msa_panel_workers <= 1:
@@ -1411,6 +1494,26 @@ class PanelDdgStandRunner:
                 self.analysis_queue.put(None)
             for thread in analysis_threads:
                 thread.join()
+        return (
+            panels,
+            chosen_predict_mode,
+            warmup_cpu_seconds,
+            warmup_gpu_seconds,
+            warmup_checkpoint_load_seconds,
+        )
+
+    def run_predict_and_analysis(self) -> dict[str, Any]:
+        profiling_artifacts: PanelProfilingArtifacts | None = None
+        if self.profiler is not None:
+            self.profiler.start()
+        try:
+            (
+                panels,
+                chosen_predict_mode,
+                warmup_cpu_seconds,
+                warmup_gpu_seconds,
+                warmup_checkpoint_load_seconds,
+            ) = self._run_predict_and_analysis()
         except Exception:
             if self.profiler is not None:
                 profiling_artifacts = self.profiler.stop()
@@ -1418,31 +1521,18 @@ class PanelDdgStandRunner:
 
         if self.profiler is not None:
             profiling_artifacts = self.profiler.stop()
-        summary_path = self._write_summary(profiling_artifacts=profiling_artifacts)
-        return {
-            "output_root": str(self.output_root),
-            "state_db": str(self.output_root / "state.sqlite"),
-            "summary_path": str(summary_path),
-            "panel_count": len(panels),
-            "mutant_job_count": sum(len(panel.job_ids) for panel in panels),
-            "predict_strategy_requested": self.config.predict_strategy,
-            "predict_strategy_selected": chosen_predict_mode,
-            "predict_panel_chunk_size": self.config.predict_panel_chunk_size,
-            "warmup_cpu_seconds": warmup_cpu_seconds,
-            "warmup_gpu_seconds": warmup_gpu_seconds,
-            "warmup_checkpoint_load_seconds": warmup_checkpoint_load_seconds,
-            "profiling_summary_path": (
-                None if profiling_artifacts is None else str(profiling_artifacts.summary_path)
-            ),
-            "profiling_events_path": (
-                None if profiling_artifacts is None else str(profiling_artifacts.events_path)
-            ),
-            "profiling_samples_path": (
-                None if profiling_artifacts is None else str(profiling_artifacts.samples_path)
-            ),
-            "profiling_timeline_svg_path": (
-                None
-                if profiling_artifacts is None
-                else str(profiling_artifacts.timeline_svg_path)
-            ),
-        }
+        return self._build_result_payload(
+            panels=panels,
+            profiling_artifacts=profiling_artifacts,
+            run_mode="resume",
+            chosen_predict_mode=chosen_predict_mode,
+            warmup_cpu_seconds=warmup_cpu_seconds,
+            warmup_gpu_seconds=warmup_gpu_seconds,
+            warmup_checkpoint_load_seconds=warmup_checkpoint_load_seconds,
+        )
+
+    def run(self) -> dict[str, Any]:
+        self.prepare_inputs()
+        payload = self.run_predict_and_analysis()
+        payload["run_mode"] = "full"
+        return payload
