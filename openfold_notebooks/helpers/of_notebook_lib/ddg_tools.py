@@ -23,6 +23,21 @@ def _first_existing(paths: list[Path]) -> Path | None:
     return None
 
 
+def _first_matching_files(search_roots: tuple[Path, ...], patterns: tuple[str, ...]) -> Path | None:
+    seen: set[Path] = set()
+    for root in search_roots:
+        if not root.exists():
+            continue
+        for pattern in patterns:
+            for candidate in root.glob(pattern):
+                if candidate in seen:
+                    continue
+                seen.add(candidate)
+                if candidate.is_file() or candidate.is_symlink():
+                    return candidate.resolve()
+    return None
+
+
 def _find_rosetta_database_near(binary_path: Path) -> Path | None:
     for parent in (binary_path.resolve().parent, *binary_path.resolve().parents):
         candidate = parent / "database"
@@ -49,12 +64,28 @@ def resolve_foldx_binary(project_dir: Path) -> ToolStatus:
     from_path = shutil.which("foldx")
     if from_path is not None:
         return ToolStatus("foldx", True, str(Path(from_path).resolve()), "PATH")
-    candidate = _first_existing(
-        [root / "tools" / "bin" / "foldx" for root in _repo_roots(project_dir)]
-    )
+    roots = _repo_roots(project_dir)
+    candidate = _first_existing([root / "tools" / "bin" / "foldx" for root in roots])
     if candidate is not None:
         return ToolStatus("foldx", True, str(candidate), "repo:tools/bin/foldx")
-    return ToolStatus("foldx", False, None, "missing", "Ожидается FOLDX_BINARY, PATH или tools/bin/foldx")
+    candidate = _first_matching_files(
+        roots,
+        (
+            "foldx/**/foldx",
+            "foldx/**/foldx_*",
+            "tools/**/foldx",
+            "tools/**/foldx_*",
+        ),
+    )
+    if candidate is not None:
+        return ToolStatus("foldx", True, str(candidate), "repo:foldx/**")
+    return ToolStatus(
+        "foldx",
+        False,
+        None,
+        "missing",
+        "Ожидается FOLDX_BINARY, PATH, tools/bin/foldx или локальная папка foldx/",
+    )
 
 
 def resolve_rosetta_score_binary(project_dir: Path) -> ToolStatus:
@@ -71,11 +102,21 @@ def resolve_rosetta_score_binary(project_dir: Path) -> ToolStatus:
     from_path = shutil.which("score_jd2")
     if from_path is not None:
         return ToolStatus("rosetta_score_jd2", True, str(Path(from_path).resolve()), "PATH")
-    candidate = _first_existing(
-        [root / "tools" / "bin" / "score_jd2" for root in _repo_roots(project_dir)]
-    )
+    roots = _repo_roots(project_dir)
+    candidate = _first_existing([root / "tools" / "bin" / "score_jd2" for root in roots])
     if candidate is not None:
         return ToolStatus("rosetta_score_jd2", True, str(candidate), "repo:tools/bin/score_jd2")
+    candidate = _first_matching_files(
+        roots,
+        (
+            "tools/**/score_jd2.static.linuxgccrelease",
+            "tools/**/score_jd2.*linuxgccrelease",
+            "rosetta*/**/score_jd2.static.linuxgccrelease",
+            "rosetta*/**/score_jd2.*linuxgccrelease",
+        ),
+    )
+    if candidate is not None:
+        return ToolStatus("rosetta_score_jd2", True, str(candidate), "repo:rosetta/**/score_jd2")
     return ToolStatus(
         "rosetta_score_jd2",
         False,
@@ -94,10 +135,14 @@ def resolve_rosetta_database(project_dir: Path, score_binary: str | None = None)
         if inferred is not None:
             return ToolStatus("rosetta_database", True, str(inferred), "relative_to_score_jd2")
     for root in _repo_roots(project_dir):
-        matches = sorted((root / "tools").glob("**/database"))
-        for match in matches:
-            if match.is_dir():
-                return ToolStatus("rosetta_database", True, str(match.resolve()), "repo:tools/**/database")
+        for parent_name in ("tools", "rosetta", "rosetta3", "rosetta_bundle"):
+            parent = root / parent_name
+            if not parent.exists():
+                continue
+            matches = sorted(parent.glob("**/database"))
+            for match in matches:
+                if match.is_dir():
+                    return ToolStatus("rosetta_database", True, str(match.resolve()), f"repo:{parent_name}/**/database")
     return ToolStatus(
         "rosetta_database",
         False,
