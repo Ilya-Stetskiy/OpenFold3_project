@@ -12,11 +12,12 @@ import requests
 
 from openfold3.testbench.evaluation import EvaluationSummary, evaluate_reports
 
-from .cif_utils import summarize_structure
+from .cif_utils import parse_structure_records, summarize_structure, write_pdb_atom_records
 from .harness import DdgBenchmarkHarness, HarnessReport
 from .methods import FoldXBuildModelMethod
 from .models import BenchmarkCase, MutationInput
 from .structure_source import (
+    CANONICAL_AA_3_TO_1,
     ResolvedStructureSource,
     resolve_structure_source,
     validate_mutation_site,
@@ -88,6 +89,22 @@ def _structure_summary_payload(structure_path: Path) -> dict[str, object]:
 
 def _default_harness() -> DdgBenchmarkHarness:
     return DdgBenchmarkHarness(methods=[FoldXBuildModelMethod()])
+
+
+def _write_mutant_structure_with_reference_hetero_atoms(
+    *,
+    source_path: Path,
+    mutant_model_path: Path,
+    output_path: Path,
+) -> None:
+    mutant_atoms = parse_structure_records(mutant_model_path)
+    reference_hetero_atoms = [
+        atom
+        for atom in parse_structure_records(source_path)
+        if str(atom.group_pdb).upper() == "HETATM"
+        or atom.residue_name.upper() not in CANONICAL_AA_3_TO_1
+    ]
+    write_pdb_atom_records(output_path, [*mutant_atoms, *reference_hetero_atoms])
 
 
 def _build_benchmark_case(
@@ -209,7 +226,11 @@ def run_local_mutation_case(
                 failure_reason = f"mutant_model_missing:{candidate_path}"
             else:
                 mutant_structure_path = case_root / candidate_path.name
-                shutil.copy2(candidate_path, mutant_structure_path)
+                _write_mutant_structure_with_reference_hetero_atoms(
+                    source_path=source.source_path,
+                    mutant_model_path=candidate_path,
+                    output_path=mutant_structure_path,
+                )
                 mutant_structure_summary = _structure_summary_payload(
                     mutant_structure_path
                 )

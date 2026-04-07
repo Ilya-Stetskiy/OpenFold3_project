@@ -117,6 +117,32 @@ def parse_structure_records(structure_path: Path) -> list[AtomRecord]:
     return parse_atom_site_records(structure_path)
 
 
+def write_pdb_atom_records(pdb_path: Path, atoms: list[AtomRecord]) -> None:
+    lines: list[str] = []
+    serial = 1
+    previous_chain: str | None = None
+    for atom in atoms:
+        if previous_chain is not None and atom.chain_id != previous_chain:
+            lines.append("TER")
+        previous_chain = atom.chain_id
+        record_name = "HETATM" if str(atom.group_pdb).upper() == "HETATM" else "ATOM"
+        atom_name = atom.atom_name[:4]
+        res_name = atom.residue_name[:3]
+        chain_id = (atom.chain_id or "?")[:1]
+        residue_token = atom.residue_id
+        digits = "".join(char for char in residue_token if char.isdigit()) or "1"
+        insertion = next((char for char in residue_token if char.isalpha()), " ")
+        b_factor = 0.0 if atom.b_factor is None else atom.b_factor
+        lines.append(
+            f"{record_name:<6}{serial:5d} {atom_name:>4} {res_name:>3} {chain_id}{int(digits):4d}{insertion:1}"
+            f"   {atom.x:8.3f}{atom.y:8.3f}{atom.z:8.3f}{1.00:6.2f}{b_factor:6.2f}          {'':>2}"
+        )
+        serial += 1
+    lines.append("TER")
+    lines.append("END")
+    pdb_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
 def summarize_structure(
     cif_path: Path, chain_groups: tuple[tuple[str, ...], ...] = ()
 ) -> StructureSummary:

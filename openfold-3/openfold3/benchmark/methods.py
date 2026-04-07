@@ -537,16 +537,22 @@ class FoldXBuildModelMethod:
                     f"AnalyseComplex failed for {pdb_name}: "
                     f"{process.stdout[-1000:]} {process.stderr[-1000:]}"
                 )
-            summary_path = _resolve_foldx_output_path(
-                output_dir,
-                prefix="Summary",
-                suffix=suffix,
-            )
-            interaction_path = _resolve_foldx_output_path(
-                output_dir,
-                prefix="Interaction",
-                suffix=suffix,
-            )
+            try:
+                summary_path = _resolve_foldx_output_path(
+                    output_dir,
+                    prefix="Summary",
+                    suffix=suffix,
+                )
+                interaction_path = _resolve_foldx_output_path(
+                    output_dir,
+                    prefix="Interaction",
+                    suffix=suffix,
+                )
+            except FileNotFoundError as exc:
+                raise RuntimeError(
+                    f"AnalyseComplex produced no interaction outputs for {pdb_name}: "
+                    f"{process.stdout[-1000:]} {process.stderr[-1000:]} ({exc})"
+                ) from exc
             return _read_foldx_first_row(summary_path), summary_path, interaction_path, runtime
 
         try:
@@ -556,24 +562,29 @@ class FoldXBuildModelMethod:
             wt_summary, wt_summary_path, wt_interaction_path, wt_runtime = _run_analyse_complex(
                 wt_model_name, f"{output_prefix}_wt"
             )
+            protocol = "BuildModel+AnalyseComplex"
+            mutant_interaction_energy = float(mutant_summary["Interaction Energy"])
+            wt_interaction_energy = float(wt_summary["Interaction Energy"])
+            score = mutant_interaction_energy - wt_interaction_energy
         except RuntimeError as exc:
-            return MethodResult(
-                method=self.name,
-                status="failed",
-                details={
-                    "reason": "foldx_analyse_complex_failed",
-                    "resolved_executable": executable_path,
-                    "work_dir": str(work_dir),
-                    "error": str(exc),
-                },
-            )
-
-        mutant_interaction_energy = float(mutant_summary["Interaction Energy"])
-        wt_interaction_energy = float(wt_summary["Interaction Energy"])
-        score = mutant_interaction_energy - wt_interaction_energy
+            protocol = "BuildModel"
+            mutant_summary = {}
+            wt_summary = {}
+            mutant_summary_path = output_dir / "Summary_unavailable.fxout"
+            wt_summary_path = output_dir / "Summary_unavailable.fxout"
+            mutant_interaction_path = output_dir / "Interaction_unavailable.fxout"
+            wt_interaction_path = output_dir / "Interaction_unavailable.fxout"
+            mutant_runtime = 0.0
+            wt_runtime = 0.0
+            mutant_interaction_energy = None
+            wt_interaction_energy = None
+            score = buildmodel_total_energy_change
+            analyse_complex_error = str(exc)
+        else:
+            analyse_complex_error = None
         runtime_seconds = time.perf_counter() - started_at
         details: dict[str, object] = {
-            "protocol": "BuildModel+AnalyseComplex",
+            "protocol": protocol,
             "resolved_executable": executable_path,
             "work_dir": str(work_dir),
             "mutation_ids": [mutation.mutation_id for mutation in context.case.mutations],
@@ -597,6 +608,8 @@ class FoldXBuildModelMethod:
             "wt_interaction_path": str(wt_interaction_path),
             "stdout_tail": build_process.stdout[-2000:],
         }
+        if analyse_complex_error is not None:
+            details["analyse_complex_error"] = analyse_complex_error
         details["generated_pdbs"] = pdb_names
         details["mutant_model_path"] = str(output_dir / mutant_model_name)
         details["wt_model_path"] = str(output_dir / wt_model_name)
