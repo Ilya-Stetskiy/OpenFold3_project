@@ -135,6 +135,43 @@ def resolve_experiment_molecules(
     return molecules, compositions_to_dataframe(compositions), metadata
 
 
+def resolve_foldx_chain_context(
+    *,
+    pdb_id: str,
+    mutable_chain_id: str,
+    pdb_cache_dir: str | Path | None = None,
+) -> dict[str, object]:
+    from openfold3.benchmark.cif_utils import parse_structure_records
+    from openfold3.benchmark.structure_source import (
+        CANONICAL_AA_3_TO_1,
+        extract_protein_sequence,
+        resolve_structure_source,
+    )
+
+    resolved = resolve_structure_source(pdb_id=pdb_id, cache_dir=pdb_cache_dir)
+    sequence = extract_protein_sequence(resolved.source_path, mutable_chain_id)
+    residue_ids: list[str] = []
+    seen: set[tuple[str, str]] = set()
+    for atom in parse_structure_records(resolved.source_path):
+        key = (atom.chain_id, atom.residue_id)
+        if key in seen or atom.chain_id != mutable_chain_id:
+            continue
+        seen.add(key)
+        if atom.residue_name.upper() not in CANONICAL_AA_3_TO_1:
+            continue
+        residue_ids.append(str(atom.residue_id))
+    return {
+        "source_path": resolved.source_path,
+        "pdb_id": resolved.pdb_id,
+        "chain_id": mutable_chain_id,
+        "sequence": sequence,
+        "sequence_length": len(sequence),
+        "residue_ids": tuple(residue_ids),
+        "first_residue_id": None if not residue_ids else residue_ids[0],
+        "last_residue_id": None if not residue_ids else residue_ids[-1],
+    }
+
+
 def build_panel_preview(
     target_id: str,
     molecules: list[dict],
@@ -494,5 +531,58 @@ def preview_panel_input(
             positions=positions,
             molecules=molecules,
         ),
+        positions,
+    )
+
+
+def preview_foldx_panel_input(
+    *,
+    pdb_id: str,
+    mutable_chain_id: str,
+    positions_mode: str,
+    positions_text: str,
+    pdb_cache_dir: str | Path | None = None,
+) -> tuple[list[dict], pd.DataFrame, pd.DataFrame, dict[str, object], tuple[int, ...]]:
+    molecules, pdb_preview_df, _ = resolve_experiment_molecules(
+        pdb_id=pdb_id,
+        pdb_cache_dir=pdb_cache_dir,
+    )
+    chain_context = resolve_foldx_chain_context(
+        pdb_id=pdb_id,
+        mutable_chain_id=mutable_chain_id,
+        pdb_cache_dir=pdb_cache_dir,
+    )
+    positions = resolve_positions(
+        positions_mode=positions_mode,
+        positions_text=positions_text,
+        sequence_length=int(chain_context["sequence_length"]),
+    )
+    preview_df = build_panel_preview(
+        target_id=build_foldx_run_name(
+            pdb_id=pdb_id,
+            mutable_chain_id=mutable_chain_id,
+        ),
+        molecules=[{"molecule_type": "protein", "chain_ids": [mutable_chain_id], "sequence": chain_context["sequence"]}],
+        mutable_chain_id=mutable_chain_id,
+        positions=positions,
+    )
+    return (
+        molecules,
+        pdb_preview_df,
+        preview_df,
+        {
+            "target_id": build_foldx_run_name(
+                pdb_id=pdb_id,
+                mutable_chain_id=mutable_chain_id,
+            ),
+            "pdb_id": normalize_pdb_id(pdb_id),
+            "mutable_chain_id": mutable_chain_id,
+            "sequence_length": int(chain_context["sequence_length"]),
+            "positions_count": len(positions),
+            "planned_mutants": len(positions) * (len(CANONICAL_AA) - 1),
+            "resolved_structure_path": str(chain_context["source_path"]),
+            "first_residue_id": chain_context["first_residue_id"],
+            "last_residue_id": chain_context["last_residue_id"],
+        },
         positions,
     )

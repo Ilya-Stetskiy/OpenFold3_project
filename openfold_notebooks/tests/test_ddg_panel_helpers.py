@@ -10,6 +10,7 @@ from of_notebook_lib.ddg_panel import (
     load_foldx_panel_visual_rows,
     load_panel_visual_rows,
     parse_positions_spec,
+    preview_foldx_panel_input,
     render_foldx_structure_comparison_html,
     render_panel_structure_comparison_html,
     resolve_positions,
@@ -216,3 +217,49 @@ def test_render_foldx_structure_comparison_html_handles_missing_files() -> None:
 
     assert "WT complex" in html
     assert "FoldX mutant" in html
+
+
+def test_preview_foldx_panel_input_uses_resolved_chain_length(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    def _fake_resolve_experiment_molecules(*, pdb_id: str, pdb_cache_dir=None):
+        del pdb_id, pdb_cache_dir
+        return (
+            [{"molecule_type": "protein", "chain_ids": ["E"], "sequence": "X" * 229}],
+            None,
+            {},
+        )
+
+    def _fake_resolve_foldx_chain_context(*, pdb_id: str, mutable_chain_id: str, pdb_cache_dir=None):
+        del pdb_id, pdb_cache_dir
+        return {
+            "source_path": tmp_path / "fake.cif",
+            "pdb_id": "6M0J",
+            "chain_id": mutable_chain_id,
+            "sequence": "A" * 194,
+            "sequence_length": 194,
+            "residue_ids": tuple(str(i) for i in range(1, 195)),
+            "first_residue_id": "1",
+            "last_residue_id": "194",
+        }
+
+    monkeypatch.setattr(
+        "of_notebook_lib.ddg_panel.resolve_experiment_molecules",
+        _fake_resolve_experiment_molecules,
+    )
+    monkeypatch.setattr(
+        "of_notebook_lib.ddg_panel.resolve_foldx_chain_context",
+        _fake_resolve_foldx_chain_context,
+    )
+
+    _, _, _, summary, positions = preview_foldx_panel_input(
+        pdb_id="6M0J",
+        mutable_chain_id="E",
+        positions_mode="all_chain_positions",
+        positions_text="",
+    )
+
+    assert summary["sequence_length"] == 194
+    assert positions[0] == 1
+    assert positions[-1] == 194
