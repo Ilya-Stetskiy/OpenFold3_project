@@ -239,6 +239,7 @@ def test_preview_foldx_panel_input_uses_resolved_chain_length(
             "chain_id": mutable_chain_id,
             "sequence": "A" * 194,
             "sequence_length": 194,
+            "sequence_positions": tuple(range(1, 195)),
             "residue_ids": tuple(str(i) for i in range(1, 195)),
             "first_residue_id": "1",
             "last_residue_id": "194",
@@ -263,3 +264,48 @@ def test_preview_foldx_panel_input_uses_resolved_chain_length(
     assert summary["sequence_length"] == 194
     assert positions[0] == 1
     assert positions[-1] == 194
+
+
+def test_preview_foldx_panel_input_exposes_residue_ids(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    def _fake_resolve_experiment_molecules(*, pdb_id: str, pdb_cache_dir=None):
+        del pdb_id, pdb_cache_dir
+        return (
+            [{"molecule_type": "protein", "chain_ids": ["E"], "sequence": "X" * 229}],
+            None,
+            {},
+        )
+
+    def _fake_resolve_foldx_chain_context(*, pdb_id: str, mutable_chain_id: str, pdb_cache_dir=None):
+        del pdb_id, pdb_cache_dir
+        return {
+            "source_path": tmp_path / "fake.cif",
+            "pdb_id": "6M0J",
+            "chain_id": mutable_chain_id,
+            "sequence": "ACD",
+            "sequence_length": 3,
+            "sequence_positions": (1, 2, 3),
+            "residue_ids": ("333", "334", "335"),
+            "first_residue_id": "333",
+            "last_residue_id": "335",
+        }
+
+    monkeypatch.setattr(
+        "of_notebook_lib.ddg_panel.resolve_experiment_molecules",
+        _fake_resolve_experiment_molecules,
+    )
+    monkeypatch.setattr(
+        "of_notebook_lib.ddg_panel.resolve_foldx_chain_context",
+        _fake_resolve_foldx_chain_context,
+    )
+
+    _, _, preview_df, _, _ = preview_foldx_panel_input(
+        pdb_id="6M0J",
+        mutable_chain_id="E",
+        positions_mode="all_chain_positions",
+        positions_text="",
+    )
+
+    assert list(preview_df["residue_id"]) == ["333", "334", "335"]

@@ -151,6 +151,7 @@ def resolve_foldx_chain_context(
     resolved = resolve_structure_source(pdb_id=pdb_id, cache_dir=pdb_cache_dir)
     sequence = extract_protein_sequence(resolved.source_path, mutable_chain_id)
     residue_ids: list[str] = []
+    sequence_positions: list[int] = []
     seen: set[tuple[str, str]] = set()
     for atom in parse_structure_records(resolved.source_path):
         key = (atom.chain_id, atom.residue_id)
@@ -159,6 +160,7 @@ def resolve_foldx_chain_context(
         seen.add(key)
         if atom.residue_name.upper() not in CANONICAL_AA_3_TO_1:
             continue
+        sequence_positions.append(len(sequence_positions) + 1)
         residue_ids.append(str(atom.residue_id))
     return {
         "source_path": resolved.source_path,
@@ -166,6 +168,7 @@ def resolve_foldx_chain_context(
         "chain_id": mutable_chain_id,
         "sequence": sequence,
         "sequence_length": len(sequence),
+        "sequence_positions": tuple(sequence_positions),
         "residue_ids": tuple(residue_ids),
         "first_residue_id": None if not residue_ids else residue_ids[0],
         "last_residue_id": None if not residue_ids else residue_ids[-1],
@@ -566,6 +569,28 @@ def preview_foldx_panel_input(
         mutable_chain_id=mutable_chain_id,
         positions=positions,
     )
+    residue_id_by_position = {
+        int(position): str(residue_id)
+        for position, residue_id in zip(
+            chain_context["sequence_positions"],
+            chain_context["residue_ids"],
+            strict=True,
+        )
+    }
+    if not preview_df.empty:
+        preview_df["residue_id"] = preview_df["position_1based"].map(residue_id_by_position)
+        preview_df = preview_df[
+            [
+                "target_id",
+                "chain_id",
+                "position_1based",
+                "residue_id",
+                "wt_residue",
+                "mutation_panel",
+                "mutant_count",
+                "mutants_preview",
+            ]
+        ]
     return (
         molecules,
         pdb_preview_df,

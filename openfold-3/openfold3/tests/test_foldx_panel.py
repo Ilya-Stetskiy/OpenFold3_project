@@ -49,11 +49,11 @@ def _write_two_chain_complex(
     ]
     for resid, residue in enumerate(chain_a, start=1):
         for atom_name, elem, (x, y, z) in coords:
-            lines.append(line(serial, atom_name, aa3[residue], "A", resid, x + resid * 3.0, y, z, elem))
+            lines.append(line(serial, atom_name, aa3[residue], "A", resid + 100, x + resid * 3.0, y, z, elem))
             serial += 1
     for resid, residue in enumerate(chain_b, start=1):
         for atom_name, elem, (x, y, z) in coords:
-            lines.append(line(serial, atom_name, aa3[residue], "B", resid, x + resid * 3.0, y + 5.0, z, elem))
+            lines.append(line(serial, atom_name, aa3[residue], "B", resid + 200, x + resid * 3.0, y + 5.0, z, elem))
             serial += 1
     lines.extend(["TER", "END"])
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -73,6 +73,7 @@ def test_build_foldx_panel_mutations_expands_19xN(tmp_path: Path) -> None:
     assert pdb_id is None
     assert len(mutations) == 38
     assert mutations[0].from_residue == "D"
+    assert mutations[0].position_1based == 201
 
 
 def test_run_foldx_panel_writes_rows_ranking_and_resume(tmp_path: Path) -> None:
@@ -87,7 +88,7 @@ def test_run_foldx_panel_writes_rows_ranking_and_resume(tmp_path: Path) -> None:
     for residue in "ACDEFGHIKLMNPQRSTVWY":
         if residue == "D":
             continue
-        case_id = f"wt_b_d1{residue.lower()}"
+        case_id = f"wt_b_d201{residue.lower()}"
         if residue == "A":
             cases[case_id] = (mutant_a, -1.0)
         elif residue == "N":
@@ -121,4 +122,4 @@ def test_run_foldx_panel_writes_rows_ranking_and_resume(tmp_path: Path) -> None:
     payload = json.loads(resumed.summary_json_path.read_text(encoding="utf-8"))
     assert payload["total_mutations"] == 19
     assert payload["successful_mutations"] == 19
-    assert payload["ranking"][0]["mutation_id"] == "B_D1A"
+    assert payload["ranking"][0]["mutation_id"] == "B_D201A"

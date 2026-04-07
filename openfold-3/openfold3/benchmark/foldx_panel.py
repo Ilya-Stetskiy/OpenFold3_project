@@ -8,10 +8,11 @@ from typing import Any
 
 import requests
 
+from .cif_utils import parse_structure_records
 from .harness import DdgBenchmarkHarness
 from .local_edit import run_local_mutation_case
 from .models import MutationInput
-from .structure_source import resolve_structure_source
+from .structure_source import CANONICAL_AA_3_TO_1, resolve_structure_source
 
 CANONICAL_AA = "ACDEFGHIKLMNPQRSTVWY"
 
@@ -61,6 +62,21 @@ def _extract_chain_sequences(structure_path: Path) -> dict[str, str]:
     return sequences
 
 
+def _resolved_chain_sites(structure_path: Path, chain_id: str) -> list[tuple[str, str]]:
+    sites: list[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for atom in parse_structure_records(structure_path):
+        key = (atom.chain_id, atom.residue_id)
+        if key in seen or atom.chain_id != chain_id:
+            continue
+        seen.add(key)
+        residue_name_1 = CANONICAL_AA_3_TO_1.get(atom.residue_name.upper())
+        if residue_name_1 is None:
+            continue
+        sites.append((str(atom.residue_id), residue_name_1))
+    return sites
+
+
 def build_foldx_panel_mutations(
     *,
     structure_path: str | Path | None = None,
@@ -76,17 +92,21 @@ def build_foldx_panel_mutations(
         cache_dir=cache_dir,
         session=session,
     )
-    sequences = _extract_chain_sequences(resolved.source_path)
-    if chain_id not in sequences:
+    resolved_sites = _resolved_chain_sites(resolved.source_path, chain_id)
+    if not resolved_sites:
         raise ValueError(f"Could not find protein chain {chain_id} in {resolved.source_path}")
-    sequence = sequences[chain_id]
     mutations: list[MutationInput] = []
     for position in positions:
-        if position < 1 or position > len(sequence):
+        if position < 1 or position > len(resolved_sites):
             raise ValueError(
-                f"Position {position} is outside chain {chain_id} length {len(sequence)}"
+                f"Position {position} is outside chain {chain_id} length {len(resolved_sites)}"
             )
-        wt_residue = sequence[position - 1]
+        residue_id, wt_residue = resolved_sites[position - 1]
+        if not str(residue_id).isdigit():
+            raise ValueError(
+                f"Residue id {chain_id}:{residue_id} is not an integer residue id and is unsupported in FoldX v1"
+            )
+        structure_position = int(residue_id)
         for to_residue in CANONICAL_AA:
             if to_residue == wt_residue:
                 continue
@@ -94,7 +114,7 @@ def build_foldx_panel_mutations(
                 MutationInput(
                     chain_id=chain_id,
                     from_residue=wt_residue,
-                    position_1based=position,
+                    position_1based=structure_position,
                     to_residue=to_residue,
                 )
             )
