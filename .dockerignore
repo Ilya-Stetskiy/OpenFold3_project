@@ -1,0 +1,16 @@
+.git
+.runtime
+.runtime_codex
+runtime_smoke
+results
+msa_cache
+pytest-temp
+**/__pycache__
+**/.pytest_cache
+**/*.pyc
+**/*.pt
+**/*.pth
+**/*.pkl
+**/*.npz
+**/*.npy
+openfold_notebooks/.pdb_cache
