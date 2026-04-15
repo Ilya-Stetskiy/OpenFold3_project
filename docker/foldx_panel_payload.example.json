@@ -1,0 +1,9 @@
+{
+  "mode": "panel",
+  "structure_path": "/input/example.pdb",
+  "chain_id": "A",
+  "positions": [42],
+  "ranking_metric": "stability_ddg",
+  "num_workers": 1,
+  "show_progress": true
+}

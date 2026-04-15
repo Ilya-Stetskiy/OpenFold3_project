@@ -1,0 +1,34 @@
+FROM python:3.11-slim
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl \
+        libgomp1 \
+        libstdc++6 \
+        procps \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /work/OpenFold3_project
+
+COPY openfold-3 ./openfold-3
+COPY foldx_worker ./foldx_worker
+
+RUN python3 -m pip install --no-cache-dir --upgrade pip \
+    && python3 -m pip install --no-cache-dir numpy packaging requests tqdm \
+    && python3 -m pip install --no-cache-dir --no-deps --editable ./openfold-3
+
+RUN mkdir -p /foldx /input /results /cache \
+    && chmod -R 777 /foldx /input /results /cache
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONPATH=/work/OpenFold3_project:/work/OpenFold3_project/openfold-3 \
+    OPENFOLD_DISABLE_OPTIONAL_DEEPSPEED_IMPORT=1 \
+    FOLDX_BINARY=/foldx/foldx \
+    FOLDX_OUTPUT_DIR=/results \
+    FOLDX_CACHE_DIR=/cache
+
+CMD ["python3", "-m", "foldx_worker.cli", "preflight"]

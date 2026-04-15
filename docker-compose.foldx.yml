@@ -1,0 +1,26 @@
+services:
+  foldx-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.foldx
+    image: openfold3-foldx-worker:local
+    environment:
+      FOLDX_BINARY: ${FOLDX_BINARY:-/foldx/foldx}
+      FOLDX_OUTPUT_DIR: /results
+      FOLDX_CACHE_DIR: /cache
+    volumes:
+      - ${FOLDX_BINARY_HOST:?Set FOLDX_BINARY_HOST to your FoldX executable}:/foldx/foldx:ro
+      - ${FOLDX_INPUT_DIR:-./foldx_input}:/input:ro
+      - ${FOLDX_OUTPUT_DIR:-./.runtime/foldx_results}:/results
+      - ${FOLDX_CACHE_DIR:-./.runtime/foldx_cache}:/cache
+    command:
+      - python3
+      - -m
+      - foldx_worker.cli
+      - run-payload
+      - --payload
+      - /input/payload.json
+      - --output-dir
+      - /results
+      - --cache-dir
+      - /cache
