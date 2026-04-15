@@ -1,202 +1,363 @@
 # 🇷🇺 README (RU)
 
-# Docker запуск OpenFold3 GPU Worker
+# OpenFold3 GPU Worker Docker Guide
 
 ## TL;DR
 
-OpenFold3 GPU Worker запускает тяжёлые задачи моделирования на отдельной GPU-машине
-и подключается к глобальному веб-серверу только исходящими запросами. Сервер хранит
-очередь, а worker берёт одно задание, выполняет OpenFold3, загружает полный архив
-результатов и снова становится свободным.
+Этот Docker-образ запускает OpenFold3 GPU worker как самостоятельный runtime: исходный код и Python-зависимости находятся внутри image, а с хоста монтируются только веса, cache и результаты. Worker может работать в двух режимах: локальный smoke test без сервера и production polling mode с глобальным сервером.
+
+Проверенный минимальный путь: собрать image, положить checkpoint в `/weights`, пройти `--preflight-only`, затем запустить `gpu_worker.local_run` с тестовым payload. Успешный smoke test должен закончиться `local job finished with status=completed`.
 
 ## Overview
 
-Этот Docker-профиль нужен, чтобы безопасно вынести GPU-вычисления из глобального
-веб-сервиса. Веб-сервер остаётся центром управления: он принимает пользовательские
-запросы, хранит очередь, выдаёт задания worker-ам и принимает результаты.
+GPU worker нужен для выноса тяжелого OpenFold3 inference из веб-сервера на отдельную GPU-машину. В production сервер хранит очередь и выдает lease, а worker сам подключается к серверу исходящими HTTP-запросами, берет одно задание, запускает OpenFold3, архивирует полный output и отправляет результат назад.
 
-Worker решает другую задачу: он управляет локальным OpenFold3 runtime на машине с GPU.
-Он проверяет доступность окружения, следит за ресурсами, запускает существующий
-`run_openfold`, пишет telemetry, сохраняет полный output и передаёт результат обратно
-серверу.
+Docker-сборка сделана как self-contained runtime. Compose больше не монтирует локальный checkout поверх `/work/OpenFold3_project`, поэтому чистая машина не зависит от незакоммиченных файлов рядом с Dockerfile. Это важно для воспроизводимости: image содержит код worker-а, OpenFold3 package, CUDA/PyTorch runtime, CUTLASS и системные зависимости.
 
-Архитектура выбрана как polling, а не входящий worker API. Это проще для GPU-машин за
-NAT/firewall, безопаснее для раннего прототипа и не требует открывать вычислительный
-узел наружу.
+Локальный режим нужен до подключения реального сервера. Он запускает один payload через тот же worker pipeline, пишет events, telemetry, manifest и имитирует upload копированием архива в `/results/local_uploads`.
 
 ## Features
 
-- Outbound-only worker: GPU-машина сама подключается к серверу.
-- Один active GPU job на worker в v1.
-- Поддержка одиночного и batch `predict`.
-- Поддержка batch вариантов одной базы.
-- Point mutation панели используют существующий `screen-mutations`.
-- Произвольные варианты или независимые белки используют multi-query `predict`.
-- Heartbeat со статусом worker-а и ресурсами.
-- Event stream по стадиям job-а.
-- Timeout job-а с завершением subprocess tree.
-- Полный output OpenFold3 сохраняется и архивируется.
-- Локальный TTL cache для отладки и повторной передачи.
-- Docker Compose профиль с GPU reservation и volume mounts.
+- Self-contained Docker image на базе NVIDIA PyTorch.
+- OpenFold3 устанавливается внутри контейнера.
+- Source bind mount не используется по умолчанию.
+- Веса монтируются в `/weights` и реально используются через `OPENFOLD_CACHE=/weights`.
+- Автоматический поиск checkpoint: `of3-p2-155k.pt`, `of3-p2-145k.pt`, `of3_ft3_v1.pt`.
+- `OPENFOLD_INFERENCE_CKPT_PATH` позволяет явно указать checkpoint.
+- Preflight проверяет OpenFold paths, torch import, CUDA, `nvidia-smi`, checkpoint и `run_openfold --help`.
+- Standalone local-run без `SERVER_URL` и `WORKER_TOKEN`.
+- Production polling mode с `WORKER_TOKEN` и `SERVER_URL`.
+- Полный output, generated input JSON, logs, telemetry, manifest и archive сохраняются в results.
+- Timeout и failure cases тоже архивируются.
+- Worker держит не больше одного активного OpenFold job.
 
 ## Key Ideas / Improvements
 
-Главная идея - не переписывать OpenFold3 как веб-сервис. Worker остаётся тонким
-оркестратором вокруг уже существующего CLI. Это снижает риск поломать основной
-runtime и позволяет сохранить прямой запуск `run_openfold`.
+Главная идея - не превращать OpenFold3 в отдельный web API внутри GPU-машины. Worker остается тонкой orchestration-обвязкой вокруг существующего CLI `run_openfold`. Это сохраняет прямую совместимость с основными командами OpenFold3 и снижает риск расхождения поведения между CLI и веб-сервисом.
 
-Очередь намеренно не живёт в worker-е. Если очередь будет локальной, потом придётся
-синхронизировать пользователей, приоритеты и квоты между сервером и вычислительными
-узлами. Поэтому в v1 worker только берёт lease на одно задание и сообщает результат.
+Вторая идея - отделить immutable runtime от mutable data. Image содержит код и зависимости, а host volumes содержат только веса, MSA cache, Triton cache и результаты. Поэтому одна и та же сборка может запускаться на чистой машине без локального checkout.
 
-Полный output сохраняется, потому что для моделирования важны не только итоговые
-метрики. Пользователю и разработчику нужны структуры, confidence files, входные JSON,
-логи и telemetry, чтобы сравнивать запуски и разбирать ошибки.
+Третья идея - сначала проверять локально. `gpu_worker.local_run` позволяет поймать проблемы с CUDA, checkpoint, RAM, bind mounts и OpenFold imports до подключения server polling contract.
 
 ## High-level Pipeline
 
-1. Worker стартует в контейнере.
-2. Проверяет директории, OpenFold checkout, свободный диск и конфигурацию.
-3. Отправляет heartbeat на сервер.
-4. Запрашивает lease.
-5. Если задания нет, ждёт следующий polling interval.
-6. Если задание есть, создаёт рабочую директорию и пишет `state.json`.
-7. Преобразует high-level payload в `query.json` или `screening_job.json`.
-8. Запускает `python -m openfold3.run_openfold`.
-9. Пишет telemetry во время выполнения.
-10. После завершения собирает manifest и архив `.tar.gz`.
-11. Загружает архив по upload URL, который пришёл от сервера.
-12. Отправляет complete event и возвращается в `idle`.
+1. Docker image собирается из repository checkout.
+2. В container image копируются `openfold-3` и `gpu_worker`.
+3. В runtime монтируются `/weights`, `/results`, `/triton_cache`, `/msa_cache`.
+4. Preflight проверяет Python/OpenFold/CUDA/checkpoint/CLI.
+5. В local mode worker читает payload JSON и создает synthetic lease.
+6. В server mode worker отправляет heartbeat и запрашивает lease у сервера.
+7. Worker пишет `query.json` или `screening_job.json`.
+8. Worker запускает `python3 -m openfold3.run_openfold predict` или `screen-mutations`.
+9. Во время выполнения пишутся telemetry и job events.
+10. После завершения создается `artifact_manifest.json`.
+11. Рабочая директория архивируется в `.tar.gz`.
+12. Local mode копирует архив в `/results/local_uploads`; server mode загружает его по `upload_url`.
+13. Worker отправляет complete/failure metadata и возвращается в idle.
 
 ## Installation
 
-### Требования
+### 1. Требования
 
-На GPU-хосте должны быть установлены:
+На Linux GPU-сервере:
 
-- Docker с Compose v2.
 - NVIDIA driver.
+- Docker Engine с Compose v2.
 - NVIDIA Container Toolkit.
-- Рабочий checkout `OpenFold3_project`.
-- Доступные веса OpenFold3.
-- Доступные cache-директории для MSA и Triton.
-- Python окружение внутри образа или примонтированное conda/venv окружение, из
-  которого запускается OpenFold3.
+- Доступ к GitHub repository.
+- Доступ к OpenFold checkpoint.
+- Достаточно RAM и disk space.
 
-Проверка GPU внутри Docker:
+На Windows laptop/workstation:
+
+- Docker Desktop.
+- WSL 2 backend.
+- NVIDIA driver с WSL GPU support.
+- PowerShell.
+- Достаточно RAM, выделенной WSL через `.wslconfig`.
+
+Если на cloud-сервере нет `docker`, `podman`, `apptainer`, `singularity` или `nerdctl`, build на этой машине не пройдет без установки container runtime администратором. Наличие GPU само по себе не заменяет Docker/Container Toolkit.
+
+### 2. Клонирование
+
+Если SSH key не настроен и появляется `Permission denied (publickey)`, используйте HTTPS:
+
+```powershell
+git clone --branch openfold_docker https://github.com/Ilya-Stetskiy/OpenFold3_project.git OpenFold3_project_docker_test
+cd OpenFold3_project_docker_test
+```
+
+Linux:
 
 ```bash
-docker run --rm --gpus all nvidia/cuda:12.4.1-runtime-ubuntu22.04 nvidia-smi
+git clone --branch openfold_docker https://github.com/Ilya-Stetskiy/OpenFold3_project.git OpenFold3_project_docker_test
+cd OpenFold3_project_docker_test
 ```
 
-Если команда не видит GPU, сначала нужно настроить NVIDIA Container Toolkit.
+### 3. Папки для runtime data
 
-### Обязательные переменные
+Windows PowerShell:
+
+```powershell
+New-Item -ItemType Directory -Force D:\openfold_weights
+New-Item -ItemType Directory -Force D:\openfold_results
+New-Item -ItemType Directory -Force D:\openfold_triton_cache
+New-Item -ItemType Directory -Force D:\openfold_msa_cache
+```
+
+Linux:
 
 ```bash
-export WORKER_TOKEN="secret-token-from-server"
-export SERVER_URL="https://your-global-server.example"
+mkdir -p /data/openfold_weights /data/openfold_results /data/openfold_triton_cache /data/openfold_msa_cache
 ```
 
-### Рекомендуемые переменные
+Пустые папки достаточны для results/cache, но `/weights` должен содержать checkpoint перед настоящим predict.
+
+### 4. WSL memory на Windows
+
+Если Docker Desktop показывает, что resource limits управляются Windows/WSL, настройка памяти делается не в UI Docker Desktop, а через `%USERPROFILE%\.wslconfig`.
+
+Проверить RAM:
+
+```powershell
+Get-CimInstance Win32_OperatingSystem |
+  Select-Object @{Name="TotalGB";Expression={"{0:N1}" -f ($_.TotalVisibleMemorySize/1MB)}},
+                @{Name="FreeGB";Expression={"{0:N1}" -f ($_.FreePhysicalMemory/1MB)}}
+```
+
+Для ноутбука с 16 GB RAM практичный минимум:
+
+```powershell
+@"
+[wsl2]
+memory=12GB
+processors=8
+swap=16GB
+"@ | Set-Content -Path "$env:USERPROFILE\.wslconfig" -Encoding ASCII
+```
+
+Применить:
+
+```powershell
+wsl --shutdown
+```
+
+Затем перезапустите Docker Desktop и проверьте:
+
+```powershell
+docker run --rm openfold3-gpu-worker:local bash -lc "free -h"
+```
+
+Если до этого был `OpenFold exited with code -9`, почти всегда причина в нехватке RAM или слишком маленьком WSL memory limit.
+
+### 5. Сборка image
+
+Windows PowerShell и Linux одинаково:
+
+```powershell
+docker build -f Dockerfile.gpu-worker -t openfold3-gpu-worker:local .
+```
+
+Если нужно полностью исключить старый build cache:
+
+```powershell
+docker build --no-cache -f Dockerfile.gpu-worker -t openfold3-gpu-worker:local .
+```
+
+После небольших правок исходников обычно используйте build без `--no-cache`: Docker переиспользует тяжелые слои base image, apt, pip и CUTLASS.
+
+### 6. Checkpoint
+
+Worker ищет checkpoint в `/weights` через `OPENFOLD_CACHE=/weights`. Поддерживаемые имена по умолчанию:
+
+- `of3-p2-155k.pt`
+- `of3-p2-145k.pt`
+- `of3_ft3_v1.pt`
+
+Если checkpoint уже есть на host, положите его в папку weights.
+
+Windows:
+
+```powershell
+Get-ChildItem D:\openfold_weights
+```
+
+Linux:
 
 ```bash
-export WORKER_ID="gpu-worker-1"
-export PYTHON="python3"
-export INSTALL_OPENFOLD_DEPS="1"
-export WORKER_CACHE_TTL_DAYS="7"
-export MAX_JOB_RUNTIME_SECONDS="86400"
-export MIN_FREE_DISK_GB="5"
+ls -lah /data/openfold_weights
 ```
 
-### Volume mounts
+Если checkpoint нужно скачать через OpenFold setup script, на Windows PowerShell можно передать ответы интерактивному скрипту:
 
-Compose-файл по умолчанию монтирует:
-
-```yaml
-./:/work/OpenFold3_project
-${OPENFOLD_WEIGHTS_DIR:-./.runtime/openfold_weights}:/weights
-${OPENFOLD_MSA_CACHE_DIR:-./msa_cache}:/msa_cache
-${OPENFOLD_TRITON_CACHE_DIR:-./.runtime/triton_cache}:/triton_cache
-${WORKER_RESULTS_HOST_DIR:-./.runtime/gpu_worker}:/work/OpenFold3_project/.runtime/gpu_worker
+```powershell
+"/weights`n/weights`n1`nno" | docker run --rm -i `
+  -v D:\openfold_weights:/weights `
+  -e OPENFOLD_CACHE=/weights `
+  openfold3-gpu-worker:local `
+  python3 -m openfold3.setup_openfold download --skip_confirmation
 ```
 
-Для реального сервера обычно лучше задать абсолютные host paths:
+Linux:
 
 ```bash
-export OPENFOLD_WEIGHTS_DIR="/mnt/data/openfold_weights"
-export OPENFOLD_MSA_CACHE_DIR="/mnt/data/openfold_msa_cache"
-export OPENFOLD_TRITON_CACHE_DIR="/mnt/data/triton_cache"
-export WORKER_RESULTS_HOST_DIR="/mnt/data/openfold_worker_results"
+printf "/weights\n/weights\n1\nno\n" | docker run --rm -i \
+  -v /data/openfold_weights:/weights \
+  -e OPENFOLD_CACHE=/weights \
+  openfold3-gpu-worker:local \
+  python3 -m openfold3.setup_openfold download --skip_confirmation
 ```
 
-По умолчанию Dockerfile устанавливает Python-зависимости OpenFold через
-`pip install -e ./openfold-3`. Если OpenFold окружение уже собрано на хосте,
-можно отключить установку тяжёлых зависимостей при сборке:
-
-```bash
-export INSTALL_OPENFOLD_DEPS="0"
-```
-
-Затем примонтируйте окружение в контейнер:
-
-```yaml
-volumes:
-  - /mnt/data/openfold_env:/opt/openfold
-```
-
-И укажите:
-
-```bash
-export OPENFOLD_PREFIX="/opt/openfold"
-export PYTHON="/opt/openfold/bin/python"
-```
+Ожидаемый результат - файл вроде `/weights/of3-p2-155k.pt` и файл `/weights/ckpt_root`.
 
 ## Usage
 
-Сборка и запуск из директории `OpenFold3_project`:
+### 1. Базовые smoke checks
 
-```bash
-docker compose -f docker-compose.gpu-worker.yml build
-docker compose -f docker-compose.gpu-worker.yml up -d
+Проверить import:
+
+```powershell
+docker run --rm openfold3-gpu-worker:local python3 -c "import openfold3.run_openfold; import gpu_worker.main; print('import ok')"
 ```
 
-Просмотр логов:
+Проверить CLI:
+
+```powershell
+docker run --rm openfold3-gpu-worker:local run_openfold --help
+```
+
+Проверить GPU:
+
+```powershell
+docker run --rm --gpus all openfold3-gpu-worker:local nvidia-smi
+```
+
+Предупреждение `CUDA Minor Version Compatibility mode ENABLED` не обязательно фатальное. Оно означает, что driver и CUDA runtime не идеально совпадают. Для production лучше обновить NVIDIA driver, но если preflight и predict проходят, тестовый запуск валиден.
+
+### 2. Preflight
+
+Windows PowerShell:
+
+```powershell
+docker run --rm --gpus all `
+  -v D:\openfold_weights:/weights `
+  -v D:\openfold_results:/results `
+  -v D:\openfold_triton_cache:/triton_cache `
+  -v D:\openfold_msa_cache:/msa_cache `
+  openfold3-gpu-worker:local `
+  python3 -m gpu_worker.main --preflight-only
+```
+
+Linux:
 
 ```bash
+docker run --rm --gpus all \
+  -v /data/openfold_weights:/weights \
+  -v /data/openfold_results:/results \
+  -v /data/openfold_triton_cache:/triton_cache \
+  -v /data/openfold_msa_cache:/msa_cache \
+  openfold3-gpu-worker:local \
+  python3 -m gpu_worker.main --preflight-only
+```
+
+Успешный результат:
+
+```text
+gpu_worker preflight ok
+```
+
+`WORKER_TOKEN` для `--preflight-only` не нужен.
+
+### 3. Local worker run без сервера
+
+Windows PowerShell:
+
+```powershell
+docker run --rm --gpus all --ipc=host --ulimit memlock=-1 --ulimit stack=67108864 `
+  -v D:\openfold_weights:/weights `
+  -v D:\openfold_results:/results `
+  -v D:\openfold_triton_cache:/triton_cache `
+  -v D:\openfold_msa_cache:/msa_cache `
+  -v ${PWD}\docker\local_payload.example.json:/payload.json:ro `
+  openfold3-gpu-worker:local `
+  python3 -m gpu_worker.local_run --payload /payload.json --results-dir /results
+```
+
+Linux:
+
+```bash
+docker run --rm --gpus all --ipc=host --ulimit memlock=-1 --ulimit stack=67108864 \
+  -v /data/openfold_weights:/weights \
+  -v /data/openfold_results:/results \
+  -v /data/openfold_triton_cache:/triton_cache \
+  -v /data/openfold_msa_cache:/msa_cache \
+  -v "$PWD/docker/local_payload.example.json:/payload.json:ro" \
+  openfold3-gpu-worker:local \
+  python3 -m gpu_worker.local_run --payload /payload.json --results-dir /results
+```
+
+Успешный результат:
+
+```text
+local job finished with status=completed: /results/local-...
+```
+
+Проверить manifest и log:
+
+```powershell
+$job = Get-ChildItem D:\openfold_results -Directory |
+  Where-Object { $_.Name -like "local-*" } |
+  Sort-Object LastWriteTime -Descending |
+  Select-Object -First 1
+
+Get-Content D:\openfold_results\local_completed_manifest.json
+Get-Content "$($job.FullName)\run_openfold.log" -Tail 80
+```
+
+Критерии успеха:
+
+- manifest содержит `"status": "completed"`;
+- manifest содержит `"error": null`;
+- log содержит `GPU available: True (cuda), used: True`;
+- log содержит `Successful Queries: 1` и `Failed Queries: 0`;
+- в `D:\openfold_results\local_uploads` или `/data/openfold_results/local_uploads` есть свежий `.tar.gz`.
+
+### 4. Production server mode
+
+Windows PowerShell:
+
+```powershell
+$env:WORKER_ID="gpu-worker-1"
+$env:WORKER_TOKEN="secret-token-from-server"
+$env:SERVER_URL="https://your-server.example"
+$env:OPENFOLD_WEIGHTS_DIR="D:\openfold_weights"
+$env:OPENFOLD_MSA_CACHE_DIR="D:\openfold_msa_cache"
+$env:OPENFOLD_TRITON_CACHE_DIR="D:\openfold_triton_cache"
+$env:WORKER_RESULTS_HOST_DIR="D:\openfold_results"
+
+docker compose -f docker-compose.gpu-worker.yml up -d --build gpu-worker
 docker compose -f docker-compose.gpu-worker.yml logs -f gpu-worker
 ```
 
-Остановка:
+Linux:
+
+```bash
+export WORKER_ID="gpu-worker-1"
+export WORKER_TOKEN="secret-token-from-server"
+export SERVER_URL="https://your-server.example"
+export OPENFOLD_WEIGHTS_DIR="/data/openfold_weights"
+export OPENFOLD_MSA_CACHE_DIR="/data/openfold_msa_cache"
+export OPENFOLD_TRITON_CACHE_DIR="/data/openfold_triton_cache"
+export WORKER_RESULTS_HOST_DIR="/data/openfold_results"
+
+docker compose -f docker-compose.gpu-worker.yml up -d --build gpu-worker
+docker compose -f docker-compose.gpu-worker.yml logs -f gpu-worker
+```
+
+Остановить:
 
 ```bash
 docker compose -f docker-compose.gpu-worker.yml down
-```
-
-Проверка переменных внутри контейнера:
-
-```bash
-docker compose -f docker-compose.gpu-worker.yml exec gpu-worker env | sort
-```
-
-Проверка OpenFold import path:
-
-```bash
-docker compose -f docker-compose.gpu-worker.yml exec gpu-worker \
-  python3 -c "import openfold3; print(openfold3.__file__)"
-```
-
-Проверка GPU:
-
-```bash
-docker compose -f docker-compose.gpu-worker.yml exec gpu-worker nvidia-smi
-```
-
-Проверка локального состояния:
-
-```bash
-docker compose -f docker-compose.gpu-worker.yml exec gpu-worker \
-  cat /work/OpenFold3_project/.runtime/gpu_worker/state.json
 ```
 
 ## Project Structure
@@ -205,398 +366,548 @@ docker compose -f docker-compose.gpu-worker.yml exec gpu-worker \
 OpenFold3_project/
   Dockerfile.gpu-worker
   docker-compose.gpu-worker.yml
-  .dockerignore
   docker/
     README.gpu-worker.md
+    local_payload.example.json
+    smoke_gpu_worker.sh
   gpu_worker/
     schemas.py
     client.py
     runner.py
     telemetry.py
     artifacts.py
+    local_run.py
     main.py
+  openfold-3/
+    openfold3/
+      run_openfold.py
+      core/data/tools/
 ```
 
-`Dockerfile.gpu-worker` задаёт CUDA runtime image, устанавливает worker-зависимости
-и по умолчанию ставит OpenFold3 в editable-режиме. Для образов, где OpenFold
-runtime примонтирован отдельно, используйте `INSTALL_OPENFOLD_DEPS=0`.
+`Dockerfile.gpu-worker` собирает self-contained CUDA/PyTorch/OpenFold runtime.
 
-`docker-compose.gpu-worker.yml` описывает сервис, GPU reservation, env-переменные и
-volume mounts.
+`docker-compose.gpu-worker.yml` описывает production service и local profile без source bind mount.
 
-`gpu_worker/` содержит код worker-а: контракт, клиент сервера, запуск OpenFold,
-телеметрию, упаковку артефактов и главный loop.
+`gpu_worker/local_run.py` запускает один payload без внешнего сервера и завершает процесс с ненулевым кодом, если manifest failed.
+
+`gpu_worker/main.py` содержит daemon loop, preflight и server polling mode.
+
+`gpu_worker/runner.py` преобразует payload в OpenFold CLI invocation.
+
+`openfold-3/openfold3/core/data/tools/` должен быть в Git. Если эта папка отсутствует, `run_openfold predict` падает с `ModuleNotFoundError: No module named 'openfold3.core.data.tools'`.
 
 ## Technical Details
 
-### Архитектура
+### Runtime paths
 
-Worker состоит из четырёх логических слоёв:
+Внутри контейнера используются стабильные пути:
 
-- Contract layer: описывает job payloads, limits, events, heartbeat и manifest.
-- Server client: выполняет HTTP-запросы к глобальному серверу с Bearer token.
-- Execution layer: превращает high-level job в OpenFold input и запускает CLI.
-- Artifact layer: собирает output, telemetry, логи, manifest и архив.
+```text
+/work/OpenFold3_project      source code inside image
+/work/OpenFold3_project/openfold-3
+/weights                    checkpoints and OpenFold cache
+/results                    worker outputs and manifests
+/triton_cache               Triton and torch extension cache
+/msa_cache                  MSA cache
+```
 
-Worker не содержит локальную очередь. Он хранит только локальное состояние текущего
-или последнего job-а, чтобы после рестарта можно было увидеть, где выполнение
-оборвалось.
+Основные env-переменные:
 
-### Server API
+```text
+OPENFOLD_CACHE=/weights
+OPENFOLD_INFERENCE_CKPT_PATH=
+WORKER_RESULTS_DIR=/results
+TRITON_CACHE_DIR=/triton_cache
+TORCH_EXTENSIONS_DIR=/triton_cache/torch_extensions
+WORKER_REQUIRE_CUDA=1
+WORKER_REQUIRE_CHECKPOINT=1
+MAX_JOB_RUNTIME_SECONDS=86400
+MIN_FREE_DISK_GB=5
+```
 
-Worker ожидает следующие endpoints:
+Если нужно указать checkpoint явно:
+
+```powershell
+-e OPENFOLD_INFERENCE_CKPT_PATH=/weights/of3-p2-155k.pt
+```
+
+### Worker-server contract
+
+Production mode использует:
 
 - `POST /api/workers/heartbeat`
 - `POST /api/workers/lease`
 - `POST /api/jobs/{job_id}/events`
-- `POST /api/jobs/{job_id}/complete`
 - upload URL из lease response
+- `POST /api/jobs/{job_id}/complete`
 
-Все API-запросы идут с заголовком:
+Все server calls используют:
 
 ```http
 Authorization: Bearer <WORKER_TOKEN>
 ```
 
-Пустой lease:
+### Job types
 
-```json
-{"job": null}
-```
+`predict_batch`:
 
-Lease с заданием:
+- high-level molecules/queries;
+- worker пишет `query.json`;
+- worker запускает `run_openfold predict`.
 
-```json
-{
-  "job": {
-    "job_id": "job-123",
-    "lease_id": "lease-456",
-    "job_type": "predict_batch",
-    "payload": {},
-    "limits": {
-      "max_runtime_seconds": 3600,
-      "min_free_disk_gb": 5,
-      "max_queries": 8,
-      "max_variants": 32
-    },
-    "upload": {
-      "url": "https://your-global-server.example/uploads/job-123",
-      "method": "PUT",
-      "headers": {}
-    }
-  }
-}
-```
+`variant_batch`:
 
-### `predict_batch`
+- base query плюс variants;
+- single point-mutation panels идут через `screen-mutations`;
+- arbitrary variants идут через multi-query `predict`.
 
-`predict_batch` предназначен для одного или нескольких независимых queries.
+### Troubleshooting
 
-Минимальный payload:
+`docker: command not found`:
 
-```json
-{
-  "queries": [
-    {
-      "query_id": "ubiquitin",
-      "molecules": [
-        {
-          "molecule_type": "protein",
-          "chain_ids": ["A"],
-          "sequence": "ACDE"
-        }
-      ]
-    }
-  ],
-  "num_diffusion_samples": 1,
-  "num_model_seeds": 1,
-  "use_msa_server": false,
-  "use_templates": false
-}
-```
+- Docker не установлен или не в PATH.
+- На managed cloud без прав администратора Docker может быть недоступен.
+- Нужен Docker/Podman/Apptainer/Singularity/nerdctl или prebuilt image на машине с container runtime.
 
-Worker генерирует `query.json` и запускает:
+`git@github.com: Permission denied (publickey)`:
 
-```bash
-python -m openfold3.run_openfold predict \
-  --query_json <work_dir>/query.json \
-  --output_dir <work_dir>/output
-```
+- SSH key не настроен.
+- Используйте HTTPS clone.
 
-### `variant_batch`
+`/opt/nvidia/nvidia_entrypoint.sh: exec: \: not found`:
 
-`variant_batch` предназначен для одной базы и набора вариантов.
+- В PowerShell использован Linux line continuation `\`.
+- В PowerShell используйте backtick: `` ` ``.
 
-Если каждый вариант содержит ровно одну point mutation, worker использует
-`screen-mutations`, чтобы сохранить существующую логику кэша и batch orchestration.
+`Python was not found` после Docker-команды:
 
-Пример:
+- Часть команды выполнилась на host Windows, а не внутри container.
+- Обычно причина - неправильный перенос строки в PowerShell.
 
-```json
-{
-  "base_query": {
-    "molecules": [
-      {
-        "molecule_type": "protein",
-        "chain_ids": ["A"],
-        "sequence": "ACDE"
-      }
-    ]
-  },
-  "query_prefix": "scan",
-  "variants": [
-    {
-      "variant_id": "A_C2G",
-      "mutations": [
-        {
-          "chain_id": "A",
-          "position_1based": 2,
-          "to_residue": "G"
-        }
-      ]
-    }
-  ]
-}
-```
+`WORKER_TOKEN must be set`:
 
-Worker генерирует `screening_job.json` и запускает:
+- Это нормально для production mode без токена.
+- Для локального smoke используйте `python3 -m gpu_worker.local_run`.
+- Для preflight используйте `python3 -m gpu_worker.main --preflight-only`.
 
-```bash
-python -m openfold3.run_openfold screen-mutations \
-  --screening_job_json <work_dir>/screening_job.json
-```
+`FileNotFoundError: /usr/local/cuda/bin/nvcc`:
 
-Если варианты заданы полными молекулами или содержат несколько изменений, worker
-собирает multi-query `query.json` и использует обычный `predict`.
+- Старый image был собран на CUDA runtime base без `nvcc`.
+- Новый Dockerfile использует NVIDIA PyTorch base. Пересоберите image.
 
-### Локальные файлы результата
+`No OpenFold checkpoint found`:
 
-В `WORKER_RESULTS_DIR` создаётся:
+- `/weights` пустой или mounted не туда.
+- Проверьте host path и наличие `of3-p2-155k.pt`.
+- Можно задать `OPENFOLD_INFERENCE_CKPT_PATH`.
+
+`ModuleNotFoundError: No module named 'openfold3.core.data.tools'`:
+
+- В image не попала папка `openfold-3/openfold3/core/data/tools`.
+- Проверьте, что она не игнорируется Git и присутствует в checkout перед build.
+
+`OpenFold exited with code -9`:
+
+- Обычно процесс был убит из-за RAM pressure.
+- На Windows/WSL настройте `.wslconfig`.
+- Увеличьте memory/swap, закройте тяжелые приложения, повторите run.
+
+`WARNING: SHMEM allocation limit is 64MB`:
+
+- Для реальных запусков добавляйте:
 
 ```text
-state.json
-<job_id>/
-  query.json
-  screening_job.json
-  run_openfold.log
-  screen_mutations.log
-  telemetry.csv
-  artifact_manifest.json
-  output/
-  screening/
-<job_id>.tar.gz
+--ipc=host --ulimit memlock=-1 --ulimit stack=67108864
 ```
 
-Фактический набор файлов зависит от типа job-а. Архив включает рабочую директорию
-целиком.
+`CUDA Minor Version Compatibility mode ENABLED`:
 
-### Runtime limits
+- Driver и CUDA runtime не идеально совпадают.
+- Если тест проходит, warning не блокирует smoke.
+- Для production лучше обновить NVIDIA driver.
 
-Worker применяет:
+`DataLoader will create 10 worker processes`:
 
-- `max_runtime_seconds` из lease или `MAX_JOB_RUNTIME_SECONDS`.
-- `min_free_disk_gb` из lease или `MIN_FREE_DISK_GB`.
-- `max_queries` для `predict_batch`.
-- `max_variants` для `variant_batch`.
-
-При timeout worker завершает subprocess group и помечает job как failed.
-
-### Performance considerations
-
-- В v1 worker выполняет один GPU job, чтобы не конфликтовать за VRAM.
-- Point mutation панели используют `screen-mutations`, потому что там уже есть
-  переиспользование кэша и batch preparation.
-- Полный output может быстро занимать много места, поэтому нужен отдельный results
-  volume и разумный `WORKER_CACHE_TTL_DAYS`.
-- Telemetry interval не должен быть слишком маленьким в production, чтобы не создавать
-  лишний IO.
+- Warning не обязательно фатальный.
+- На слабых машинах может замедлять запуск; это отдельная настройка OpenFold runtime.
 
 ## Limitations
 
-- Worker выполняет только один active GPU job.
-- Локальной очереди нет.
-- Pause/cancel не реализованы.
-- Worker не предоставляет входящий HTTP API.
-- Тяжёлые данные, веса и cache-директории всё ещё должны приходить через volume
-  mounts.
+- GPU worker v1 не содержит локальную очередь.
+- Один worker process управляет одним GPU execution slot.
+- Cancel/pause не реализованы; timeout убивает subprocess tree.
+- Local mode не заменяет server integration test, он проверяет только standalone pipeline.
+- На 4 GB VRAM и 16 GB RAM возможны ограничения по размеру реальных задач.
+- Windows Docker Desktop через WSL требует отдельной настройки memory/swap.
+- `setup_openfold download` остается интерактивным, поэтому в Docker-примерах ввод передается через pipe.
+- Full output archive может быть большим на реальных задачах.
 
 ## Future Work
 
-- Добавить cancel через серверный control endpoint.
-- Добавить upload retry с backoff и resume.
-- Добавить поддержку нескольких GPU как `1 active job per GPU`.
-- Добавить server-side signed URLs для объектного хранилища.
-- Добавить отдельный smoke-test compose profile с fake server.
-- Добавить healthcheck для контейнера.
+- Добавить официальный fake polling server для end-to-end server contract smoke.
+- Добавить retry/backoff для upload failures.
+- Добавить chunked/streaming upload для больших архивов.
+- Добавить более подробную классификацию OpenFold exit codes.
+- Добавить настройки числа DataLoader workers для малых машин.
+- Подготовить prebuilt image publishing pipeline.
+- Добавить отдельный minimal test payload для variant/screen-mutations.
+- Добавить server-side dashboard для worker telemetry и job progress.
 
 ---
 
 # 🇬🇧 README (EN)
 
-# Docker Setup for OpenFold3 GPU Worker
+# OpenFold3 GPU Worker Docker Guide
 
 ## TL;DR
 
-OpenFold3 GPU Worker runs heavy structure-prediction jobs on a dedicated GPU
-machine and talks to the global web server only through outbound requests. The
-server owns the queue; the worker leases one job, runs OpenFold3, uploads a full
-result archive, and returns to idle.
+This Docker image runs the OpenFold3 GPU worker as a self-contained runtime: source code and Python dependencies live inside the image, while the host only provides weights, caches, and results. The worker supports two modes: a local smoke test without a server and production polling mode against the global server.
+
+The verified minimum path is: build the image, place a checkpoint under `/weights`, run `--preflight-only`, then run `gpu_worker.local_run` with the test payload. A successful smoke test ends with `local job finished with status=completed`.
 
 ## Overview
 
-This Docker profile exists to move GPU computation out of the global web server.
-The web server remains the control plane: it accepts user requests, stores the
-queue, leases work to workers, and receives completed artifacts.
+The GPU worker moves heavy OpenFold3 inference out of the web server and onto a dedicated GPU machine. In production, the global server owns the queue and leases jobs; the worker connects outbound, takes one lease, runs OpenFold3, packages the full output, and sends the result back.
 
-The worker manages the local OpenFold3 runtime on the GPU node. It validates the
-environment, tracks resources, runs the existing `run_openfold` CLI, records
-telemetry, preserves the full output, and sends the result back to the server.
+The Docker setup is designed as a self-contained runtime. Compose no longer bind-mounts the local checkout over `/work/OpenFold3_project`, so a clean machine does not depend on uncommitted files next to the Dockerfile. The image contains the worker code, OpenFold3 package, CUDA/PyTorch runtime, CUTLASS, and system dependencies.
 
-The design uses polling instead of an inbound worker API. That is safer for early
-deployment, works better behind NAT/firewalls, and avoids exposing the GPU machine
-to the public network.
+The local mode exists to validate the machine before connecting it to a real server. It runs one payload through the same worker pipeline, writes events, telemetry, a manifest, and simulates upload by copying the archive into `/results/local_uploads`.
 
 ## Features
 
-- Outbound-only worker.
-- One active GPU job per worker in v1.
-- Single-query and multi-query `predict` support.
-- Variant batches based on one input.
-- Point mutation panels reuse the existing `screen-mutations` path.
-- Arbitrary variants or independent proteins use multi-query `predict`.
-- Heartbeat with worker status and resource metrics.
-- Job lifecycle events.
-- Job timeout with subprocess-tree termination.
-- Full OpenFold3 output preservation.
-- Local TTL cache for debugging and re-upload.
-- Docker Compose profile with GPU reservation and volume mounts.
+- Self-contained Docker image based on NVIDIA PyTorch.
+- OpenFold3 is installed inside the container.
+- No default source bind mount.
+- Weights are mounted at `/weights` and used through `OPENFOLD_CACHE=/weights`.
+- Automatic checkpoint lookup for `of3-p2-155k.pt`, `of3-p2-145k.pt`, and `of3_ft3_v1.pt`.
+- `OPENFOLD_INFERENCE_CKPT_PATH` can point to an explicit checkpoint.
+- Preflight checks OpenFold paths, torch import, CUDA, `nvidia-smi`, checkpoint, and `run_openfold --help`.
+- Standalone local-run without `SERVER_URL` or `WORKER_TOKEN`.
+- Production polling mode with `WORKER_TOKEN` and `SERVER_URL`.
+- Full output, generated input JSON, logs, telemetry, manifest, and archive are retained.
+- Timeout and failure cases are archived as well.
+- The worker runs at most one active OpenFold job.
 
 ## Key Ideas / Improvements
 
-The main idea is to avoid turning OpenFold3 itself into a web server. The worker is
-a thin orchestration layer around the existing CLI. This reduces risk and keeps
-direct `run_openfold` usage intact.
+The main idea is not to turn OpenFold3 into a separate web API on the GPU machine. The worker stays a thin orchestration layer around the existing `run_openfold` CLI. This preserves direct CLI compatibility and reduces the risk of behavior drift between command-line usage and the web-service workflow.
 
-The queue intentionally does not live in the worker. A local queue would later
-require synchronization of users, priorities, quotas, and fairness across the
-server and all GPU nodes. In v1 the worker only leases one job and reports the
-result.
+The second idea is to separate immutable runtime from mutable data. The image contains code and dependencies; host volumes contain only weights, MSA cache, Triton cache, and results. The same image can therefore run on a clean machine without a local source checkout.
 
-The full output is preserved because structure-prediction jobs are not fully
-represented by one metric. Users and developers need structures, confidence files,
-input JSON, logs, and telemetry to compare runs and debug failures.
+The third idea is to test locally first. `gpu_worker.local_run` catches CUDA, checkpoint, RAM, bind mount, and OpenFold import issues before the server polling contract is introduced.
 
 ## High-level Pipeline
 
-1. The worker starts in a container.
-2. It validates directories, the OpenFold checkout, disk space, and configuration.
-3. It sends a heartbeat to the server.
-4. It requests a lease.
-5. If no job is available, it waits for the next polling interval.
-6. If a job is available, it creates a work directory and writes `state.json`.
-7. It converts the high-level payload into `query.json` or `screening_job.json`.
-8. It runs `python -m openfold3.run_openfold`.
-9. It records telemetry while the job runs.
-10. It writes a manifest and builds a `.tar.gz` archive.
-11. It uploads the archive to the upload URL provided by the server.
-12. It sends completion status and returns to `idle`.
+1. The Docker image is built from the repository checkout.
+2. `openfold-3` and `gpu_worker` are copied into the image.
+3. Runtime mounts provide `/weights`, `/results`, `/triton_cache`, and `/msa_cache`.
+4. Preflight validates Python, OpenFold, CUDA, checkpoint, and CLI availability.
+5. In local mode, the worker reads a payload JSON and creates a synthetic lease.
+6. In server mode, the worker sends heartbeat and requests a lease.
+7. The worker writes `query.json` or `screening_job.json`.
+8. The worker runs `python3 -m openfold3.run_openfold predict` or `screen-mutations`.
+9. Telemetry and job events are written during execution.
+10. `artifact_manifest.json` is created after completion or failure.
+11. The work directory is packaged into a `.tar.gz` archive.
+12. Local mode copies the archive into `/results/local_uploads`; server mode uploads it to the provided `upload_url`.
+13. The worker sends completion or failure metadata and returns to idle.
 
 ## Installation
 
-### Requirements
+### 1. Requirements
 
-The GPU host needs:
+On a Linux GPU server:
 
-- Docker with Compose v2.
 - NVIDIA driver.
+- Docker Engine with Compose v2.
 - NVIDIA Container Toolkit.
-- A working `OpenFold3_project` checkout.
-- Available OpenFold3 model weights.
-- Available MSA and Triton cache directories.
-- A Python environment inside the image, or a mounted conda/venv environment that
-  can run OpenFold3.
+- Access to the GitHub repository.
+- Access to an OpenFold checkpoint.
+- Enough RAM and disk space.
 
-Check GPU access from Docker:
+On a Windows laptop or workstation:
+
+- Docker Desktop.
+- WSL 2 backend.
+- NVIDIA driver with WSL GPU support.
+- PowerShell.
+- Enough RAM allocated to WSL through `.wslconfig`.
+
+If a cloud server has no `docker`, `podman`, `apptainer`, `singularity`, or `nerdctl`, the build cannot run there unless an administrator installs a container runtime. Having a GPU does not replace Docker or the NVIDIA Container Toolkit.
+
+### 2. Clone
+
+If SSH keys are not configured and you see `Permission denied (publickey)`, use HTTPS:
+
+```powershell
+git clone --branch openfold_docker https://github.com/Ilya-Stetskiy/OpenFold3_project.git OpenFold3_project_docker_test
+cd OpenFold3_project_docker_test
+```
+
+Linux:
 
 ```bash
-docker run --rm --gpus all nvidia/cuda:12.4.1-runtime-ubuntu22.04 nvidia-smi
+git clone --branch openfold_docker https://github.com/Ilya-Stetskiy/OpenFold3_project.git OpenFold3_project_docker_test
+cd OpenFold3_project_docker_test
 ```
 
-If this command cannot see the GPU, configure NVIDIA Container Toolkit first.
+### 3. Runtime data directories
 
-### Required variables
+Windows PowerShell:
+
+```powershell
+New-Item -ItemType Directory -Force D:\openfold_weights
+New-Item -ItemType Directory -Force D:\openfold_results
+New-Item -ItemType Directory -Force D:\openfold_triton_cache
+New-Item -ItemType Directory -Force D:\openfold_msa_cache
+```
+
+Linux:
 
 ```bash
-export WORKER_TOKEN="secret-token-from-server"
-export SERVER_URL="https://your-global-server.example"
+mkdir -p /data/openfold_weights /data/openfold_results /data/openfold_triton_cache /data/openfold_msa_cache
 ```
 
-### Recommended variables
+Empty directories are enough for results and caches, but `/weights` must contain a checkpoint before a real prediction.
+
+### 4. WSL memory on Windows
+
+If Docker Desktop says resource limits are managed by Windows/WSL, memory is not configured in the Docker Desktop UI. Configure `%USERPROFILE%\.wslconfig` instead.
+
+Check system RAM:
+
+```powershell
+Get-CimInstance Win32_OperatingSystem |
+  Select-Object @{Name="TotalGB";Expression={"{0:N1}" -f ($_.TotalVisibleMemorySize/1MB)}},
+                @{Name="FreeGB";Expression={"{0:N1}" -f ($_.FreePhysicalMemory/1MB)}}
+```
+
+For a 16 GB laptop, a practical minimum is:
+
+```powershell
+@"
+[wsl2]
+memory=12GB
+processors=8
+swap=16GB
+"@ | Set-Content -Path "$env:USERPROFILE\.wslconfig" -Encoding ASCII
+```
+
+Apply the settings:
+
+```powershell
+wsl --shutdown
+```
+
+Restart Docker Desktop and verify:
+
+```powershell
+docker run --rm openfold3-gpu-worker:local bash -lc "free -h"
+```
+
+If you previously saw `OpenFold exited with code -9`, the usual cause is RAM pressure or a WSL memory limit that is too low.
+
+### 5. Build the image
+
+Windows PowerShell and Linux:
+
+```powershell
+docker build -f Dockerfile.gpu-worker -t openfold3-gpu-worker:local .
+```
+
+To ignore old build cache completely:
+
+```powershell
+docker build --no-cache -f Dockerfile.gpu-worker -t openfold3-gpu-worker:local .
+```
+
+After small source changes, usually build without `--no-cache`: Docker will reuse the heavy base image, apt, pip, and CUTLASS layers.
+
+### 6. Checkpoint
+
+The worker looks for checkpoints in `/weights` through `OPENFOLD_CACHE=/weights`. Default supported names:
+
+- `of3-p2-155k.pt`
+- `of3-p2-145k.pt`
+- `of3_ft3_v1.pt`
+
+If a checkpoint already exists on the host, place it in the weights directory.
+
+Windows:
+
+```powershell
+Get-ChildItem D:\openfold_weights
+```
+
+Linux:
 
 ```bash
-export WORKER_ID="gpu-worker-1"
-export PYTHON="python3"
-export INSTALL_OPENFOLD_DEPS="1"
-export WORKER_CACHE_TTL_DAYS="7"
-export MAX_JOB_RUNTIME_SECONDS="86400"
-export MIN_FREE_DISK_GB="5"
+ls -lah /data/openfold_weights
 ```
 
-### Volume mounts
+If you need to download the checkpoint through the OpenFold setup script, PowerShell can pipe answers into the interactive script:
 
-The default Compose file mounts:
-
-```yaml
-./:/work/OpenFold3_project
-${OPENFOLD_WEIGHTS_DIR:-./.runtime/openfold_weights}:/weights
-${OPENFOLD_MSA_CACHE_DIR:-./msa_cache}:/msa_cache
-${OPENFOLD_TRITON_CACHE_DIR:-./.runtime/triton_cache}:/triton_cache
-${WORKER_RESULTS_HOST_DIR:-./.runtime/gpu_worker}:/work/OpenFold3_project/.runtime/gpu_worker
+```powershell
+"/weights`n/weights`n1`nno" | docker run --rm -i `
+  -v D:\openfold_weights:/weights `
+  -e OPENFOLD_CACHE=/weights `
+  openfold3-gpu-worker:local `
+  python3 -m openfold3.setup_openfold download --skip_confirmation
 ```
 
-For a real server, absolute host paths are usually better:
+Linux:
 
 ```bash
-export OPENFOLD_WEIGHTS_DIR="/mnt/data/openfold_weights"
-export OPENFOLD_MSA_CACHE_DIR="/mnt/data/openfold_msa_cache"
-export OPENFOLD_TRITON_CACHE_DIR="/mnt/data/triton_cache"
-export WORKER_RESULTS_HOST_DIR="/mnt/data/openfold_worker_results"
+printf "/weights\n/weights\n1\nno\n" | docker run --rm -i \
+  -v /data/openfold_weights:/weights \
+  -e OPENFOLD_CACHE=/weights \
+  openfold3-gpu-worker:local \
+  python3 -m openfold3.setup_openfold download --skip_confirmation
 ```
 
-By default, the Dockerfile installs OpenFold Python dependencies with
-`pip install -e ./openfold-3`. If an OpenFold environment already exists on the
-host, you can skip the heavy dependency install during image build:
-
-```bash
-export INSTALL_OPENFOLD_DEPS="0"
-```
-
-Then mount that environment into the container:
-
-```yaml
-volumes:
-  - /mnt/data/openfold_env:/opt/openfold
-```
-
-Then set:
-
-```bash
-export OPENFOLD_PREFIX="/opt/openfold"
-export PYTHON="/opt/openfold/bin/python"
-```
+The expected result is a file such as `/weights/of3-p2-155k.pt` plus `/weights/ckpt_root`.
 
 ## Usage
 
-Build and start from `OpenFold3_project`:
+### 1. Basic smoke checks
 
-```bash
-docker compose -f docker-compose.gpu-worker.yml build
-docker compose -f docker-compose.gpu-worker.yml up -d
+Check imports:
+
+```powershell
+docker run --rm openfold3-gpu-worker:local python3 -c "import openfold3.run_openfold; import gpu_worker.main; print('import ok')"
 ```
 
-Follow logs:
+Check CLI:
+
+```powershell
+docker run --rm openfold3-gpu-worker:local run_openfold --help
+```
+
+Check GPU visibility:
+
+```powershell
+docker run --rm --gpus all openfold3-gpu-worker:local nvidia-smi
+```
+
+`CUDA Minor Version Compatibility mode ENABLED` is not always fatal. It means the host driver and container CUDA runtime do not perfectly match. For production, update the NVIDIA driver if possible; for smoke testing, a passing preflight and prediction are sufficient.
+
+### 2. Preflight
+
+Windows PowerShell:
+
+```powershell
+docker run --rm --gpus all `
+  -v D:\openfold_weights:/weights `
+  -v D:\openfold_results:/results `
+  -v D:\openfold_triton_cache:/triton_cache `
+  -v D:\openfold_msa_cache:/msa_cache `
+  openfold3-gpu-worker:local `
+  python3 -m gpu_worker.main --preflight-only
+```
+
+Linux:
 
 ```bash
+docker run --rm --gpus all \
+  -v /data/openfold_weights:/weights \
+  -v /data/openfold_results:/results \
+  -v /data/openfold_triton_cache:/triton_cache \
+  -v /data/openfold_msa_cache:/msa_cache \
+  openfold3-gpu-worker:local \
+  python3 -m gpu_worker.main --preflight-only
+```
+
+Successful output:
+
+```text
+gpu_worker preflight ok
+```
+
+`WORKER_TOKEN` is not required for `--preflight-only`.
+
+### 3. Local worker run without a server
+
+Windows PowerShell:
+
+```powershell
+docker run --rm --gpus all --ipc=host --ulimit memlock=-1 --ulimit stack=67108864 `
+  -v D:\openfold_weights:/weights `
+  -v D:\openfold_results:/results `
+  -v D:\openfold_triton_cache:/triton_cache `
+  -v D:\openfold_msa_cache:/msa_cache `
+  -v ${PWD}\docker\local_payload.example.json:/payload.json:ro `
+  openfold3-gpu-worker:local `
+  python3 -m gpu_worker.local_run --payload /payload.json --results-dir /results
+```
+
+Linux:
+
+```bash
+docker run --rm --gpus all --ipc=host --ulimit memlock=-1 --ulimit stack=67108864 \
+  -v /data/openfold_weights:/weights \
+  -v /data/openfold_results:/results \
+  -v /data/openfold_triton_cache:/triton_cache \
+  -v /data/openfold_msa_cache:/msa_cache \
+  -v "$PWD/docker/local_payload.example.json:/payload.json:ro" \
+  openfold3-gpu-worker:local \
+  python3 -m gpu_worker.local_run --payload /payload.json --results-dir /results
+```
+
+Successful output:
+
+```text
+local job finished with status=completed: /results/local-...
+```
+
+Check manifest and logs:
+
+```powershell
+$job = Get-ChildItem D:\openfold_results -Directory |
+  Where-Object { $_.Name -like "local-*" } |
+  Sort-Object LastWriteTime -Descending |
+  Select-Object -First 1
+
+Get-Content D:\openfold_results\local_completed_manifest.json
+Get-Content "$($job.FullName)\run_openfold.log" -Tail 80
+```
+
+Success criteria:
+
+- the manifest contains `"status": "completed"`;
+- the manifest contains `"error": null`;
+- the log contains `GPU available: True (cuda), used: True`;
+- the log contains `Successful Queries: 1` and `Failed Queries: 0`;
+- a fresh `.tar.gz` exists in `D:\openfold_results\local_uploads` or `/data/openfold_results/local_uploads`.
+
+### 4. Production server mode
+
+Windows PowerShell:
+
+```powershell
+$env:WORKER_ID="gpu-worker-1"
+$env:WORKER_TOKEN="secret-token-from-server"
+$env:SERVER_URL="https://your-server.example"
+$env:OPENFOLD_WEIGHTS_DIR="D:\openfold_weights"
+$env:OPENFOLD_MSA_CACHE_DIR="D:\openfold_msa_cache"
+$env:OPENFOLD_TRITON_CACHE_DIR="D:\openfold_triton_cache"
+$env:WORKER_RESULTS_HOST_DIR="D:\openfold_results"
+
+docker compose -f docker-compose.gpu-worker.yml up -d --build gpu-worker
+docker compose -f docker-compose.gpu-worker.yml logs -f gpu-worker
+```
+
+Linux:
+
+```bash
+export WORKER_ID="gpu-worker-1"
+export WORKER_TOKEN="secret-token-from-server"
+export SERVER_URL="https://your-server.example"
+export OPENFOLD_WEIGHTS_DIR="/data/openfold_weights"
+export OPENFOLD_MSA_CACHE_DIR="/data/openfold_msa_cache"
+export OPENFOLD_TRITON_CACHE_DIR="/data/openfold_triton_cache"
+export WORKER_RESULTS_HOST_DIR="/data/openfold_results"
+
+docker compose -f docker-compose.gpu-worker.yml up -d --build gpu-worker
 docker compose -f docker-compose.gpu-worker.yml logs -f gpu-worker
 ```
 
@@ -606,256 +917,195 @@ Stop:
 docker compose -f docker-compose.gpu-worker.yml down
 ```
 
-Inspect container environment:
-
-```bash
-docker compose -f docker-compose.gpu-worker.yml exec gpu-worker env | sort
-```
-
-Check the OpenFold import path:
-
-```bash
-docker compose -f docker-compose.gpu-worker.yml exec gpu-worker \
-  python3 -c "import openfold3; print(openfold3.__file__)"
-```
-
-Check GPU visibility:
-
-```bash
-docker compose -f docker-compose.gpu-worker.yml exec gpu-worker nvidia-smi
-```
-
-Inspect local worker state:
-
-```bash
-docker compose -f docker-compose.gpu-worker.yml exec gpu-worker \
-  cat /work/OpenFold3_project/.runtime/gpu_worker/state.json
-```
-
 ## Project Structure
 
 ```text
 OpenFold3_project/
   Dockerfile.gpu-worker
   docker-compose.gpu-worker.yml
-  .dockerignore
   docker/
     README.gpu-worker.md
+    local_payload.example.json
+    smoke_gpu_worker.sh
   gpu_worker/
     schemas.py
     client.py
     runner.py
     telemetry.py
     artifacts.py
+    local_run.py
     main.py
+  openfold-3/
+    openfold3/
+      run_openfold.py
+      core/data/tools/
 ```
 
-`Dockerfile.gpu-worker` defines the CUDA runtime image, installs worker
-dependencies, and installs OpenFold3 in editable mode by default. For images
-where the OpenFold runtime is mounted separately, use `INSTALL_OPENFOLD_DEPS=0`.
+`Dockerfile.gpu-worker` builds the self-contained CUDA, PyTorch, and OpenFold runtime.
 
-`docker-compose.gpu-worker.yml` defines the service, GPU reservation, environment
-variables, and volume mounts.
+`docker-compose.gpu-worker.yml` defines the production service and local profile without a source bind mount.
 
-`gpu_worker/` contains the worker code: contract models, server client, OpenFold
-execution, telemetry, artifact packaging, and the main loop.
+`gpu_worker/local_run.py` runs one payload without an external server and exits with a non-zero status if the manifest failed.
+
+`gpu_worker/main.py` contains the daemon loop, preflight, and server polling mode.
+
+`gpu_worker/runner.py` converts payloads into OpenFold CLI invocations.
+
+`openfold-3/openfold3/core/data/tools/` must be tracked in Git. If this package is missing, `run_openfold predict` fails with `ModuleNotFoundError: No module named 'openfold3.core.data.tools'`.
 
 ## Technical Details
 
-### Architecture
+### Runtime paths
 
-The worker has four logical layers:
+Stable paths inside the container:
 
-- Contract layer: job payloads, limits, events, heartbeat, and manifest.
-- Server client: HTTP calls to the global server with a Bearer token.
-- Execution layer: high-level job conversion and OpenFold CLI execution.
-- Artifact layer: output, telemetry, logs, manifest, and archive packaging.
+```text
+/work/OpenFold3_project      source code inside image
+/work/OpenFold3_project/openfold-3
+/weights                    checkpoints and OpenFold cache
+/results                    worker outputs and manifests
+/triton_cache               Triton and torch extension cache
+/msa_cache                  MSA cache
+```
 
-The worker does not maintain a local queue. It only stores local state for the
-current or most recent job so that interrupted runs can be inspected after restart.
+Key environment variables:
 
-### Server API
+```text
+OPENFOLD_CACHE=/weights
+OPENFOLD_INFERENCE_CKPT_PATH=
+WORKER_RESULTS_DIR=/results
+TRITON_CACHE_DIR=/triton_cache
+TORCH_EXTENSIONS_DIR=/triton_cache/torch_extensions
+WORKER_REQUIRE_CUDA=1
+WORKER_REQUIRE_CHECKPOINT=1
+MAX_JOB_RUNTIME_SECONDS=86400
+MIN_FREE_DISK_GB=5
+```
 
-The worker expects these endpoints:
+To force an explicit checkpoint:
+
+```powershell
+-e OPENFOLD_INFERENCE_CKPT_PATH=/weights/of3-p2-155k.pt
+```
+
+### Worker-server contract
+
+Production mode uses:
 
 - `POST /api/workers/heartbeat`
 - `POST /api/workers/lease`
 - `POST /api/jobs/{job_id}/events`
-- `POST /api/jobs/{job_id}/complete`
 - upload URL from the lease response
+- `POST /api/jobs/{job_id}/complete`
 
-All API requests include:
+All server calls use:
 
 ```http
 Authorization: Bearer <WORKER_TOKEN>
 ```
 
-Empty lease:
+### Job types
 
-```json
-{"job": null}
-```
+`predict_batch`:
 
-Lease with a job:
+- high-level molecules and queries;
+- the worker writes `query.json`;
+- the worker runs `run_openfold predict`.
 
-```json
-{
-  "job": {
-    "job_id": "job-123",
-    "lease_id": "lease-456",
-    "job_type": "predict_batch",
-    "payload": {},
-    "limits": {
-      "max_runtime_seconds": 3600,
-      "min_free_disk_gb": 5,
-      "max_queries": 8,
-      "max_variants": 32
-    },
-    "upload": {
-      "url": "https://your-global-server.example/uploads/job-123",
-      "method": "PUT",
-      "headers": {}
-    }
-  }
-}
-```
+`variant_batch`:
 
-### `predict_batch`
+- one base query plus variants;
+- single point-mutation panels use `screen-mutations`;
+- arbitrary variants use multi-query `predict`.
 
-`predict_batch` is used for one or more independent queries.
+### Troubleshooting
 
-Minimal payload:
+`docker: command not found`:
 
-```json
-{
-  "queries": [
-    {
-      "query_id": "ubiquitin",
-      "molecules": [
-        {
-          "molecule_type": "protein",
-          "chain_ids": ["A"],
-          "sequence": "ACDE"
-        }
-      ]
-    }
-  ],
-  "num_diffusion_samples": 1,
-  "num_model_seeds": 1,
-  "use_msa_server": false,
-  "use_templates": false
-}
-```
+- Docker is not installed or not in PATH.
+- On a managed cloud server without administrator access, Docker may be unavailable.
+- You need Docker, Podman, Apptainer, Singularity, nerdctl, or a prebuilt image on a machine with a container runtime.
 
-The worker writes `query.json` and runs:
+`git@github.com: Permission denied (publickey)`:
 
-```bash
-python -m openfold3.run_openfold predict \
-  --query_json <work_dir>/query.json \
-  --output_dir <work_dir>/output
-```
+- SSH keys are not configured.
+- Use HTTPS clone.
 
-### `variant_batch`
+`/opt/nvidia/nvidia_entrypoint.sh: exec: \: not found`:
 
-`variant_batch` is used for one base query and a set of variants.
+- Linux line continuation `\` was used in PowerShell.
+- In PowerShell, use a backtick: `` ` ``.
 
-If each variant contains exactly one point mutation, the worker uses
-`screen-mutations` to preserve the existing cache and batch orchestration logic.
+`Python was not found` after a Docker command:
 
-Example:
+- Part of the command ran on the Windows host instead of inside the container.
+- The usual cause is incorrect line continuation in PowerShell.
 
-```json
-{
-  "base_query": {
-    "molecules": [
-      {
-        "molecule_type": "protein",
-        "chain_ids": ["A"],
-        "sequence": "ACDE"
-      }
-    ]
-  },
-  "query_prefix": "scan",
-  "variants": [
-    {
-      "variant_id": "A_C2G",
-      "mutations": [
-        {
-          "chain_id": "A",
-          "position_1based": 2,
-          "to_residue": "G"
-        }
-      ]
-    }
-  ]
-}
-```
+`WORKER_TOKEN must be set`:
 
-The worker writes `screening_job.json` and runs:
+- This is expected for production mode without a token.
+- For local smoke, use `python3 -m gpu_worker.local_run`.
+- For preflight, use `python3 -m gpu_worker.main --preflight-only`.
 
-```bash
-python -m openfold3.run_openfold screen-mutations \
-  --screening_job_json <work_dir>/screening_job.json
-```
+`FileNotFoundError: /usr/local/cuda/bin/nvcc`:
 
-If variants are full molecule definitions or contain multiple changes, the worker
-builds a multi-query `query.json` and uses regular `predict`.
+- An old image was built on a CUDA runtime base without `nvcc`.
+- The current Dockerfile uses the NVIDIA PyTorch base. Rebuild the image.
 
-### Local output files
+`No OpenFold checkpoint found`:
 
-`WORKER_RESULTS_DIR` contains:
+- `/weights` is empty or mounted incorrectly.
+- Check the host path and make sure `of3-p2-155k.pt` exists.
+- You can set `OPENFOLD_INFERENCE_CKPT_PATH`.
+
+`ModuleNotFoundError: No module named 'openfold3.core.data.tools'`:
+
+- The image is missing `openfold-3/openfold3/core/data/tools`.
+- Make sure the package is not ignored by Git and exists in the checkout before building.
+
+`OpenFold exited with code -9`:
+
+- The process was usually killed because of RAM pressure.
+- On Windows/WSL, configure `.wslconfig`.
+- Increase memory and swap, close heavy applications, and rerun.
+
+`WARNING: SHMEM allocation limit is 64MB`:
+
+- For real runs, add:
 
 ```text
-state.json
-<job_id>/
-  query.json
-  screening_job.json
-  run_openfold.log
-  screen_mutations.log
-  telemetry.csv
-  artifact_manifest.json
-  output/
-  screening/
-<job_id>.tar.gz
+--ipc=host --ulimit memlock=-1 --ulimit stack=67108864
 ```
 
-The exact files depend on the job type. The archive includes the whole work
-directory.
+`CUDA Minor Version Compatibility mode ENABLED`:
 
-### Runtime limits
+- The host driver and container CUDA runtime do not perfectly match.
+- If the test passes, this warning does not block the smoke test.
+- For production, update the NVIDIA driver if possible.
 
-The worker enforces:
+`DataLoader will create 10 worker processes`:
 
-- `max_runtime_seconds` from the lease or `MAX_JOB_RUNTIME_SECONDS`.
-- `min_free_disk_gb` from the lease or `MIN_FREE_DISK_GB`.
-- `max_queries` for `predict_batch`.
-- `max_variants` for `variant_batch`.
-
-On timeout, the worker terminates the subprocess group and marks the job as failed.
-
-### Performance considerations
-
-- In v1 the worker runs one GPU job to avoid VRAM contention.
-- Point mutation panels use `screen-mutations` because it already has cache reuse and
-  batch preparation.
-- Full output can consume disk quickly, so use a dedicated results volume and a
-  reasonable `WORKER_CACHE_TTL_DAYS`.
-- Production telemetry interval should not be too low to avoid unnecessary IO.
+- This warning is not necessarily fatal.
+- On smaller machines it may slow execution; tuning DataLoader workers is a separate OpenFold runtime setting.
 
 ## Limitations
 
-- Only one active GPU job per worker.
-- No local queue.
-- No pause/cancel support yet.
-- No inbound worker HTTP API.
-- Large data, model weights, and cache directories still need to be provided
-  through volume mounts.
+- GPU worker v1 has no local queue.
+- One worker process controls one GPU execution slot.
+- Cancel and pause are not implemented; timeout kills the subprocess tree.
+- Local mode is not a replacement for server integration testing; it only validates the standalone pipeline.
+- 4 GB VRAM and 16 GB RAM limit the size of practical real-world jobs.
+- Docker Desktop on Windows through WSL requires separate memory and swap configuration.
+- `setup_openfold download` remains interactive, so Docker examples pipe answers into it.
+- Full output archives can be large for real jobs.
 
 ## Future Work
 
-- Add cancel support through a server-side control endpoint.
-- Add upload retry with backoff and resume.
-- Support multiple GPUs as one active job per GPU.
-- Support server-side signed URLs for object storage.
-- Add a smoke-test Compose profile with a fake server.
-- Add a container healthcheck.
+- Add an official fake polling server for end-to-end server contract smoke tests.
+- Add retry and backoff for upload failures.
+- Add chunked or streaming upload for large archives.
+- Add more precise OpenFold exit-code classification.
+- Add DataLoader worker tuning for small machines.
+- Prepare a prebuilt image publishing pipeline.
+- Add a minimal variant/screen-mutations test payload.
+- Add a server-side dashboard for worker telemetry and job progress.

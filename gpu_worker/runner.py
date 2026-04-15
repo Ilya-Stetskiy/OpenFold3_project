@@ -241,7 +241,8 @@ class OpenFoldWorkerRunner:
             "num_diffusion_samples": payload.num_diffusion_samples,
             "num_model_seeds": payload.num_model_seeds,
             "runner_yaml": payload.runner_yaml,
-            "inference_ckpt_path": payload.inference_ckpt_path,
+            "inference_ckpt_path": payload.inference_ckpt_path
+            or self._default_checkpoint_arg(payload.inference_ckpt_name),
             "inference_ckpt_name": payload.inference_ckpt_name,
             "use_msa_server": payload.use_msa_server,
             "use_templates": payload.use_templates,
@@ -349,6 +350,9 @@ class OpenFoldWorkerRunner:
         inference_ckpt_path: str | None,
         inference_ckpt_name: str | None,
     ) -> list[str]:
+        checkpoint_path = inference_ckpt_path or self._default_checkpoint_arg(
+            inference_ckpt_name
+        )
         cmd = [
             str(self.config.openfold_python),
             "-m",
@@ -369,15 +373,24 @@ class OpenFoldWorkerRunner:
             cmd += ["--num_model_seeds", str(num_model_seeds)]
         if runner_yaml is not None:
             cmd += ["--runner_yaml", runner_yaml]
-        if inference_ckpt_path is not None:
-            cmd += ["--inference_ckpt_path", inference_ckpt_path]
+        if checkpoint_path is not None:
+            cmd += ["--inference_ckpt_path", checkpoint_path]
         if inference_ckpt_name is not None:
             cmd += ["--inference_ckpt_name", inference_ckpt_name]
         return cmd
 
+    def _default_checkpoint_arg(self, inference_ckpt_name: str | None) -> str | None:
+        if inference_ckpt_name is not None:
+            return None
+        checkpoint_path = self.config.resolve_checkpoint_path(required=False)
+        return str(checkpoint_path) if checkpoint_path is not None else None
+
     def _build_env(self) -> dict[str, str]:
         env = os.environ.copy()
         env["PYTHONUNBUFFERED"] = "1"
+        env["OPENFOLD_CACHE"] = str(self.config.openfold_cache)
+        env["TRITON_CACHE_DIR"] = str(self.config.triton_cache_dir)
+        env["TORCH_EXTENSIONS_DIR"] = str(self.config.torch_extensions_dir)
         project_dir = str(self.config.openfold_project_dir)
         repo_dir = str(self.config.effective_openfold_repo_dir)
         existing = env.get("PYTHONPATH")

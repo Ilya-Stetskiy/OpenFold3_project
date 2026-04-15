@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import shutil
@@ -26,10 +27,18 @@ from .telemetry import ResourceSampler, TelemetryRecorder, utc_now
 
 
 class GPUWorker:
-    def __init__(self, config: WorkerConfig) -> None:
+    def __init__(
+        self,
+        config: WorkerConfig,
+        client: Any | None = None,
+        *,
+        require_client: bool = True,
+    ) -> None:
         self.config = config
         self.config.results_dir.mkdir(parents=True, exist_ok=True)
-        self.client = WorkerClient(config)
+        self.client = client if client is not None else (
+            WorkerClient(config) if require_client else None
+        )
         self.sampler = ResourceSampler(config.results_dir)
         self.runner = OpenFoldWorkerRunner(config)
         self.started_at = time.monotonic()
@@ -38,6 +47,7 @@ class GPUWorker:
         self._last_heartbeat_at = 0.0
 
     def run_forever(self) -> None:
+        self._require_client()
         self._preflight()
         self._recover_state()
         while True:
@@ -67,17 +77,28 @@ class GPUWorker:
                 f"OpenFold repo not found: {self.config.effective_openfold_repo_dir}"
             )
         self.config.results_dir.mkdir(parents=True, exist_ok=True)
+        self.config.triton_cache_dir.mkdir(parents=True, exist_ok=True)
+        self.config.torch_extensions_dir.mkdir(parents=True, exist_ok=True)
         probe_path = self.config.results_dir / ".write_probe"
         probe_path.write_text("ok\n", encoding="utf-8")
         probe_path.unlink(missing_ok=True)
         openfold_python = self.config.openfold_python
         executable = self._resolve_executable(openfold_python)
-        probe = subprocess.run(
+        self._run_preflight_command(
             [
                 str(executable),
                 "-c",
                 "import click; import openfold3.run_openfold",
             ],
+            "OpenFold import probe",
+        )
+        torch_probe = (
+            "import torch; "
+            "print(torch.__version__); "
+            "print('cuda_available=' + str(torch.cuda.is_available()))"
+        )
+        torch_result = subprocess.run(
+            [str(executable), "-c", torch_probe],
             cwd=self.config.effective_openfold_repo_dir,
             env=self.runner._build_env(),
             text=True,
@@ -85,11 +106,30 @@ class GPUWorker:
             timeout=min(30, self.config.request_timeout_seconds),
             check=False,
         )
-        if probe.returncode != 0:
+        if torch_result.returncode != 0:
             raise RuntimeError(
-                "OpenFold runtime probe failed: "
-                f"{(probe.stderr or probe.stdout).strip()}"
+                "Torch import probe failed: "
+                f"{(torch_result.stderr or torch_result.stdout).strip()}"
             )
+        if self.config.require_cuda and "cuda_available=True" not in torch_result.stdout:
+            raise RuntimeError(
+                "Torch CUDA probe failed: "
+                f"{torch_result.stdout.strip() or torch_result.stderr.strip()}"
+            )
+        if self.config.require_cuda:
+            self._run_preflight_command(["nvidia-smi"], "nvidia-smi probe")
+        self.config.resolve_checkpoint_path(required=self.config.require_checkpoint)
+        env = self.runner._build_env()
+        run_openfold = shutil.which("run_openfold", path=env.get("PATH"))
+        if run_openfold is not None:
+            self._run_preflight_command(
+                [run_openfold, "--help"],
+                "run_openfold console script probe",
+            )
+        self._run_preflight_command(
+            [str(executable), "-m", "openfold3.run_openfold", "--help"],
+            "run_openfold CLI probe",
+        )
         if self.config.min_free_disk_gb > 0:
             usage = shutil.disk_usage(self.config.results_dir)
             free_gb = usage.free / (1024**3)
@@ -98,6 +138,20 @@ class GPUWorker:
                     f"Low disk space: {free_gb:.2f} GB free, "
                     f"required {self.config.min_free_disk_gb:.2f} GB"
                 )
+
+    def _run_preflight_command(self, cmd: list[str], label: str) -> None:
+        result = subprocess.run(
+            cmd,
+            cwd=self.config.effective_openfold_repo_dir,
+            env=self.runner._build_env(),
+            text=True,
+            capture_output=True,
+            timeout=min(30, self.config.request_timeout_seconds),
+            check=False,
+        )
+        if result.returncode != 0:
+            output = (result.stderr or result.stdout).strip()
+            raise RuntimeError(f"{label} failed: {output}")
 
     @staticmethod
     def _resolve_executable(path: Path) -> Path:
@@ -325,7 +379,8 @@ class GPUWorker:
         if manifest.archive_path is None:
             raise RuntimeError("Artifact archive was not created")
         self._event(lease, "uploading", "Uploading artifact archive")
-        manifest.upload_response = self.client.upload_archive(
+        client = self._require_client()
+        manifest.upload_response = client.upload_archive(
             lease.upload,
             Path(manifest.archive_path),
             manifest,
@@ -334,7 +389,7 @@ class GPUWorker:
             Path(manifest.work_dir) / "artifact_manifest.json",
             manifest.model_dump(mode="json"),
         )
-        self.client.complete(manifest)
+        client.complete(manifest)
 
     def _enforce_limits(self, lease: LeaseJob) -> None:
         min_free = lease.limits.min_free_disk_gb
@@ -369,7 +424,7 @@ class GPUWorker:
             resources=self.sampler.snapshot(),
             **details,
         )
-        self.client.heartbeat(payload)
+        self._require_client().heartbeat(payload)
         self._last_heartbeat_at = now
 
     def _event(
@@ -384,7 +439,7 @@ class GPUWorker:
             resources = self.sampler.snapshot()
         except Exception:
             resources = None
-        self.client.event(
+        self._require_client().event(
             lease.job_id,
             JobEvent(
                 worker_id=self.config.worker_id,
@@ -408,10 +463,26 @@ class GPUWorker:
     def _write_state(self, state: dict[str, Any]) -> None:
         write_json(self.config.state_path, state)
 
+    def _require_client(self) -> Any:
+        if self.client is None:
+            raise RuntimeError("Worker client is not configured")
+        return self.client
 
-def main() -> None:
+
+def main(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(description="Run the OpenFold3 GPU worker.")
+    parser.add_argument(
+        "--preflight-only",
+        action="store_true",
+        help="Validate runtime dependencies and exit without polling the server.",
+    )
+    args = parser.parse_args(argv)
     config = WorkerConfig()
-    worker = GPUWorker(config)
+    worker = GPUWorker(config, require_client=not args.preflight_only)
+    if args.preflight_only:
+        worker._preflight()
+        print("gpu_worker preflight ok")
+        return
     worker.run_forever()
 
 

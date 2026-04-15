@@ -1,31 +1,78 @@
-FROM nvidia/cuda:12.4.1-runtime-ubuntu22.04
+FROM nvcr.io/nvidia/pytorch:25.02-py3
 
-ENV PYTHONUNBUFFERED=1 \
-    DEBIAN_FRONTEND=noninteractive \
-    OPENFOLD_PROJECT_DIR=/work/OpenFold3_project \
-    OPENFOLD_REPO_DIR=/work/OpenFold3_project/openfold-3 \
-    WORKER_RESULTS_DIR=/work/OpenFold3_project/.runtime/gpu_worker
+ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates \
-        python3 \
-        python-is-python3 \
-        python3-pip \
+        curl \
+        git \
+        hmmer \
+        libsm6 \
+        libxext6 \
+        libxft2 \
+        libxrender1 \
+        ninja-build \
+        wget \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /work/OpenFold3_project
 
-COPY gpu_worker ./gpu_worker
 COPY openfold-3 ./openfold-3
+COPY gpu_worker ./gpu_worker
 
-ARG INSTALL_OPENFOLD_DEPS=1
 RUN python3 -m pip install --no-cache-dir --upgrade pip \
-    && python3 -m pip install --no-cache-dir pydantic click PyYAML \
-    && if [ "$INSTALL_OPENFOLD_DEPS" = "1" ]; then \
-        python3 -m pip install --no-cache-dir -e ./openfold-3; \
-    fi
+    && python3 -m pip install --no-cache-dir \
+        awscli \
+        awscrt \
+        aria2 \
+        biopython \
+        biotite==1.2.0 \
+        boto3 \
+        click \
+        "cuda-python<12.9.1" \
+        deepspeed \
+        func_timeout \
+        ijson \
+        kalign-python \
+        lmdb \
+        memory_profiler \
+        mkl \
+        ml-collections \
+        modelcif \
+        "nvidia-cutlass<4" \
+        pandas \
+        pdbeccdutils \
+        pydantic \
+        pytorch-lightning \
+        PyYAML \
+        rdkit \
+        requests \
+        scipy \
+        tqdm \
+        typing-extensions \
+        wandb
 
-ENV PYTHONPATH=/work/OpenFold3_project:/work/OpenFold3_project/openfold-3
+RUN git clone https://github.com/NVIDIA/cutlass --branch v3.6.0 --depth 1 /opt/cutlass
+
+RUN python3 -m pip install --no-cache-dir --no-deps --editable ./openfold-3
+
+RUN mkdir -p /weights /msa_cache /triton_cache/autotune /triton_cache/torch_extensions /results \
+    && chmod -R 777 /weights /msa_cache /triton_cache /results
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONPATH=/work/OpenFold3_project:/work/OpenFold3_project/openfold-3 \
+    OPENFOLD_PROJECT_DIR=/work/OpenFold3_project \
+    OPENFOLD_REPO_DIR=/work/OpenFold3_project/openfold-3 \
+    OPENFOLD_CACHE=/weights \
+    WORKER_RESULTS_DIR=/results \
+    TRITON_CACHE_DIR=/triton_cache \
+    TORCH_EXTENSIONS_DIR=/triton_cache/torch_extensions \
+    CUTLASS_PATH=/opt/cutlass \
+    TORCH_CUDA_ARCH_LIST="8.0;8.6;9.0;12.0" \
+    KMP_AFFINITY=none \
+    NVIDIA_VISIBLE_DEVICES=all \
+    NVIDIA_DRIVER_CAPABILITIES=compute,utility
 
 CMD ["python3", "-m", "gpu_worker.main"]

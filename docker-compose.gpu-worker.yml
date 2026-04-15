@@ -3,8 +3,6 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.gpu-worker
-      args:
-        INSTALL_OPENFOLD_DEPS: ${INSTALL_OPENFOLD_DEPS:-1}
     image: openfold3-gpu-worker:local
     restart: unless-stopped
     environment:
@@ -14,19 +12,68 @@ services:
       PYTHON: ${PYTHON:-python3}
       OPENFOLD_PROJECT_DIR: /work/OpenFold3_project
       OPENFOLD_REPO_DIR: /work/OpenFold3_project/openfold-3
-      OPENFOLD_PREFIX: ${OPENFOLD_PREFIX:-}
-      WORKER_RESULTS_DIR: /work/OpenFold3_project/.runtime/gpu_worker
+      OPENFOLD_CACHE: /weights
+      OPENFOLD_INFERENCE_CKPT_PATH: ${OPENFOLD_INFERENCE_CKPT_PATH:-}
+      WORKER_RESULTS_DIR: /results
       WORKER_CACHE_TTL_DAYS: ${WORKER_CACHE_TTL_DAYS:-7}
       MAX_JOB_RUNTIME_SECONDS: ${MAX_JOB_RUNTIME_SECONDS:-86400}
       MIN_FREE_DISK_GB: ${MIN_FREE_DISK_GB:-5}
       WORKER_POLL_INTERVAL_SECONDS: ${WORKER_POLL_INTERVAL_SECONDS:-10}
       WORKER_HEARTBEAT_INTERVAL_SECONDS: ${WORKER_HEARTBEAT_INTERVAL_SECONDS:-30}
+      WORKER_REQUIRE_CUDA: ${WORKER_REQUIRE_CUDA:-1}
+      WORKER_REQUIRE_CHECKPOINT: ${WORKER_REQUIRE_CHECKPOINT:-1}
+      TRITON_CACHE_DIR: /triton_cache
+      TORCH_EXTENSIONS_DIR: /triton_cache/torch_extensions
+      TORCH_CUDA_ARCH_LIST: ${TORCH_CUDA_ARCH_LIST:-8.0;8.6;9.0;12.0}
     volumes:
-      - ./:/work/OpenFold3_project
       - ${OPENFOLD_WEIGHTS_DIR:-./.runtime/openfold_weights}:/weights
       - ${OPENFOLD_MSA_CACHE_DIR:-./msa_cache}:/msa_cache
       - ${OPENFOLD_TRITON_CACHE_DIR:-./.runtime/triton_cache}:/triton_cache
-      - ${WORKER_RESULTS_HOST_DIR:-./.runtime/gpu_worker}:/work/OpenFold3_project/.runtime/gpu_worker
+      - ${WORKER_RESULTS_HOST_DIR:-./.runtime/gpu_worker}:/results
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  gpu-worker-local:
+    profiles: ["local"]
+    build:
+      context: .
+      dockerfile: Dockerfile.gpu-worker
+    image: openfold3-gpu-worker:local
+    command:
+      - python3
+      - -m
+      - gpu_worker.local_run
+      - --payload
+      - /payload/payload.json
+      - --job-type
+      - ${LOCAL_JOB_TYPE:-predict_batch}
+      - --results-dir
+      - /results
+    environment:
+      PYTHON: ${PYTHON:-python3}
+      OPENFOLD_PROJECT_DIR: /work/OpenFold3_project
+      OPENFOLD_REPO_DIR: /work/OpenFold3_project/openfold-3
+      OPENFOLD_CACHE: /weights
+      OPENFOLD_INFERENCE_CKPT_PATH: ${OPENFOLD_INFERENCE_CKPT_PATH:-}
+      WORKER_RESULTS_DIR: /results
+      MAX_JOB_RUNTIME_SECONDS: ${MAX_JOB_RUNTIME_SECONDS:-86400}
+      MIN_FREE_DISK_GB: ${MIN_FREE_DISK_GB:-5}
+      WORKER_REQUIRE_CUDA: ${WORKER_REQUIRE_CUDA:-1}
+      WORKER_REQUIRE_CHECKPOINT: ${WORKER_REQUIRE_CHECKPOINT:-1}
+      TRITON_CACHE_DIR: /triton_cache
+      TORCH_EXTENSIONS_DIR: /triton_cache/torch_extensions
+      TORCH_CUDA_ARCH_LIST: ${TORCH_CUDA_ARCH_LIST:-8.0;8.6;9.0;12.0}
+    volumes:
+      - ${LOCAL_PAYLOAD_FILE:-./docker/local_payload.example.json}:/payload/payload.json:ro
+      - ${OPENFOLD_WEIGHTS_DIR:-./.runtime/openfold_weights}:/weights
+      - ${OPENFOLD_MSA_CACHE_DIR:-./msa_cache}:/msa_cache
+      - ${OPENFOLD_TRITON_CACHE_DIR:-./.runtime/triton_cache}:/triton_cache
+      - ${WORKER_RESULTS_HOST_DIR:-./.runtime/gpu_worker}:/results
     deploy:
       resources:
         reservations:

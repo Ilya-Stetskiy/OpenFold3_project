@@ -545,8 +545,8 @@ class InferenceExperimentRunner(ExperimentRunner):
         experiment_config,
         num_diffusion_samples: int | None = None,
         num_model_seeds: int | None = None,
-        use_msa_server: bool = False,
-        use_templates: bool = False,
+        use_msa_server: bool | None = None,
+        use_templates: bool | None = None,
         output_dir: Path | None = None,
     ):
         super().__init__(experiment_config)
@@ -587,8 +587,8 @@ class InferenceExperimentRunner(ExperimentRunner):
         num_diffusion_samples: int | None,
         num_model_seeds: int | None,
         output_dir: Path | None,
-        use_msa_server: bool = False,
-        use_templates: bool = False,
+        use_msa_server: bool | None = None,
+        use_templates: bool | None = None,
     ):
         """Updates configuration given command line args."""
         if output_dir:
@@ -602,11 +602,11 @@ class InferenceExperimentRunner(ExperimentRunner):
             start_seed = 42
             self.seeds = generate_seeds(start_seed, num_model_seeds)
 
-        if use_msa_server:
-            self.experiment_config.experiment_settings.use_msa_server = True
+        if use_msa_server is not None:
+            self.experiment_config.experiment_settings.use_msa_server = use_msa_server
 
-        if use_templates:
-            self.experiment_config.experiment_settings.use_templates = True
+        if use_templates is not None:
+            self.experiment_config.experiment_settings.use_templates = use_templates
 
     @cached_property
     def use_msa_server(self) -> bool:

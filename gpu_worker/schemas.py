@@ -11,6 +11,11 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 WorkerStatus = Literal["idle", "running", "uploading", "draining", "error"]
 JobType = Literal["predict_batch", "variant_batch"]
+KNOWN_CHECKPOINT_FILENAMES = (
+    "of3-p2-155k.pt",
+    "of3-p2-145k.pt",
+    "of3_ft3_v1.pt",
+)
 EventType = Literal[
     "accepted",
     "started",
@@ -22,6 +27,13 @@ EventType = Literal[
     "completed",
     "failed",
 ]
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
 class WorkerConfig(BaseModel):
@@ -59,6 +71,34 @@ class WorkerConfig(BaseModel):
         default_factory=lambda: Path(
             os.environ.get("WORKER_RESULTS_DIR", Path.cwd() / ".runtime" / "gpu_worker")
         ).expanduser()
+    )
+    openfold_cache: Path = Field(
+        default_factory=lambda: Path(
+            os.environ.get("OPENFOLD_CACHE", "/weights")
+        ).expanduser()
+    )
+    triton_cache_dir: Path = Field(
+        default_factory=lambda: Path(
+            os.environ.get("TRITON_CACHE_DIR", "/triton_cache")
+        ).expanduser()
+    )
+    torch_extensions_dir: Path = Field(
+        default_factory=lambda: Path(
+            os.environ.get("TORCH_EXTENSIONS_DIR", "/triton_cache/torch_extensions")
+        ).expanduser()
+    )
+    default_inference_ckpt_path: Path | None = Field(
+        default_factory=lambda: (
+            Path(os.environ["OPENFOLD_INFERENCE_CKPT_PATH"]).expanduser()
+            if os.environ.get("OPENFOLD_INFERENCE_CKPT_PATH")
+            else None
+        )
+    )
+    require_cuda: bool = Field(
+        default_factory=lambda: _env_bool("WORKER_REQUIRE_CUDA", True)
+    )
+    require_checkpoint: bool = Field(
+        default_factory=lambda: _env_bool("WORKER_REQUIRE_CHECKPOINT", True)
     )
     cache_ttl_days: int = Field(
         default_factory=lambda: int(os.environ.get("WORKER_CACHE_TTL_DAYS", "7")),
@@ -123,6 +163,36 @@ class WorkerConfig(BaseModel):
     @property
     def state_path(self) -> Path:
         return self.results_dir / "state.json"
+
+    def resolve_checkpoint_path(self, *, required: bool) -> Path | None:
+        if self.default_inference_ckpt_path is not None:
+            if self.default_inference_ckpt_path.exists():
+                return self.default_inference_ckpt_path
+            if required:
+                raise FileNotFoundError(
+                    "OPENFOLD_INFERENCE_CKPT_PATH does not exist: "
+                    f"{self.default_inference_ckpt_path}"
+                )
+            return None
+
+        root = self.openfold_cache
+        ckpt_root_file = root / "ckpt_root"
+        if ckpt_root_file.exists():
+            root = Path(ckpt_root_file.read_text(encoding="utf-8").strip())
+
+        for filename in KNOWN_CHECKPOINT_FILENAMES:
+            candidate = root / filename
+            if candidate.exists():
+                return candidate
+
+        if required:
+            expected = ", ".join(KNOWN_CHECKPOINT_FILENAMES)
+            raise FileNotFoundError(
+                "No OpenFold checkpoint found. Mount weights at OPENFOLD_CACHE "
+                f"({self.openfold_cache}) or set OPENFOLD_INFERENCE_CKPT_PATH. "
+                f"Expected one of: {expected}"
+            )
+        return None
 
 
 class RuntimeLimits(BaseModel):

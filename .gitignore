@@ -18,6 +18,8 @@ local_data/
 cif_result/
 molecules/
 tools/
+!openfold-3/openfold3/core/data/tools/
+!openfold-3/openfold3/core/data/tools/*.py
 rosetta_binary_ubuntu_3.15_bundle/
 two_protein_pos614_full20_logs/
 two_protein_pos614_only_cif/
