@@ -1,0 +1,38 @@
+{
+  "dataset_hash": "f6997dd866801e7e1e8e4de4cffb2d26b33978f7e983e8b8bb765685b5f69b7d",
+  "dataset_source_url": "https://zenodo.org/records/8169289/files/fireprot_upload.zip?download=1",
+  "ddg_range": [
+    -8.64,
+    9.8
+  ],
+  "discarded_rows_path": "/mnt/d/Proga/OpenFold_codex/OpenFold3_project/data/processed/discarded_rows.csv",
+  "filtering_steps": {
+    "duplicates_removed": 20,
+    "invalid_ddg": 1561,
+    "invalid_mutation": 0,
+    "invalid_pdb_id": 0,
+    "kept_before_dedup": 3133,
+    "mapping_failed": 303,
+    "sequence_structure_mismatch": 0,
+    "total": 4997
+  },
+  "number_of_proteins": 88,
+  "number_of_rows": 3113,
+  "output_columns": [
+    "protein_id",
+    "pdb_id",
+    "chain",
+    "position",
+    "wt_residue",
+    "mut_residue",
+    "experimental_ddg",
+    "mutation_id",
+    "pdb_residue_id",
+    "pdb_path"
+  ],
+  "pandas_version": "3.0.1",
+  "preprocessing_timestamp": "2026-04-20T16:56:33.719855+00:00",
+  "preprocessing_version": "v1.1",
+  "processed_dataset_path": "/mnt/d/Proga/OpenFold_codex/OpenFold3_project/data/processed/dataset_v1.csv",
+  "python_version": "3.12.3 (main, Mar  3 2026, 12:15:18) [GCC 13.3.0]"
+}
