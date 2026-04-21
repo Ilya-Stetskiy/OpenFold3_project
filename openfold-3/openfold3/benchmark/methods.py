@@ -411,12 +411,24 @@ class FoldXBuildModelMethod:
             "false",
         ]
         build_started = time.perf_counter()
-        build_process = subprocess.run(
-            build_command,
-            cwd=work_dir,
-            capture_output=True,
-            text=True,
-        )
+        try:
+            build_process = subprocess.run(
+                build_command,
+                cwd=work_dir,
+                capture_output=True,
+                text=True,
+            )
+        except OSError as exc:
+            return MethodResult(
+                method=self.name,
+                status="failed",
+                details={
+                    "reason": "foldx_launch_failed",
+                    "resolved_executable": executable_path,
+                    "work_dir": str(work_dir),
+                    "error": f"{type(exc).__name__}: {exc}",
+                },
+            )
         build_runtime_seconds = time.perf_counter() - build_started
         structure_stem = structure_copy.stem
         dif_path = output_dir / f"Dif_{output_prefix}_{structure_stem}.fxout"

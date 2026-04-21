@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import io
 import json
+import time
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from contextlib import nullcontext, redirect_stderr, redirect_stdout
 from dataclasses import asdict, dataclass
@@ -310,19 +311,46 @@ def _run_mutation_payload(
     session: requests.Session | None,
     harness: DdgBenchmarkHarness | None,
 ) -> dict[str, Any]:
-    with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
-        result = run_local_mutation_case(
-            mutation=mutation,
-            work_dir=cases_root,
-            structure_path=source_path,
-            case_id=case_id,
-            cache_dir=cache_dir,
-            session=session,
-            harness=harness,
+    case_root = cases_root / case_id
+    started_at = time.perf_counter()
+    try:
+        with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            result = run_local_mutation_case(
+                mutation=mutation,
+                work_dir=cases_root,
+                structure_path=source_path,
+                case_id=case_id,
+                cache_dir=cache_dir,
+                session=session,
+                harness=harness,
+            )
+        return json.loads(
+            (result.report_path.parent / "local_edit_result.json").read_text(
+                encoding="utf-8"
+            )
         )
-    return json.loads(
-        (result.report_path.parent / "local_edit_result.json").read_text(encoding="utf-8")
-    )
+    except Exception as exc:
+        case_root.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "case_id": case_id,
+            "mutation": asdict(mutation),
+            "source_kind": "structure_path",
+            "source_path": str(source_path),
+            "source_cache_hit": False,
+            "mutant_structure_path": None,
+            "local_edit_status": "failed",
+            "prepared_from_cif": None,
+            "runtime_seconds": time.perf_counter() - started_at,
+            "failure_reason": f"{type(exc).__name__}: {exc}",
+            "report_path": str(case_root / "local_edit_report.json"),
+            "harness_report": None,
+            "mutant_structure_summary": None,
+        }
+        (case_root / "local_edit_result.json").write_text(
+            json.dumps(payload, indent=2),
+            encoding="utf-8",
+        )
+        return payload
 
 
 def run_foldx_panel(

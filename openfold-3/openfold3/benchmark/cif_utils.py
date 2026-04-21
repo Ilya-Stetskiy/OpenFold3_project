@@ -18,6 +18,14 @@ def _distance(left: tuple[float, float, float], right: tuple[float, float, float
     return math.dist(left, right)
 
 
+def _first_present(row: dict[str, str], *keys: str, default: str = "?") -> str:
+    for key in keys:
+        value = row.get(key)
+        if value not in {None, "?", "."}:
+            return value
+    return default
+
+
 def parse_pdb_atom_records(pdb_path: Path) -> list[AtomRecord]:
     records: list[AtomRecord] = []
     for raw_line in pdb_path.read_text(encoding="utf-8").splitlines():
@@ -80,19 +88,17 @@ def parse_atom_site_records(cif_path: Path) -> list[AtomRecord]:
                 f"expected {len(headers)} columns, got {len(parts)}"
             )
         row = dict(zip(headers, parts, strict=True))
-        auth_chain = row.get("auth_asym_id", "?")
-        label_chain = row.get("label_asym_id", "?")
-        chain_id = auth_chain if auth_chain not in {"?", "."} else label_chain
-        auth_seq_id = row.get("auth_seq_id", "?")
-        label_seq_id = row.get("label_seq_id", "?")
-        residue_id = auth_seq_id if auth_seq_id not in {"?", "."} else label_seq_id
+        chain_id = _first_present(row, "auth_asym_id", "label_asym_id")
+        residue_id = _first_present(row, "auth_seq_id", "label_seq_id")
+        residue_name = _first_present(row, "auth_comp_id", "label_comp_id")
+        atom_name = _first_present(row, "auth_atom_id", "label_atom_id")
         b_factor_raw = row.get("B_iso_or_equiv")
         records.append(
             AtomRecord(
                 chain_id=chain_id,
-                residue_name=row["auth_comp_id"],
+                residue_name=residue_name,
                 residue_id=residue_id,
-                atom_name=row["auth_atom_id"],
+                atom_name=atom_name,
                 x=float(row["Cartn_x"]),
                 y=float(row["Cartn_y"]),
                 z=float(row["Cartn_z"]),

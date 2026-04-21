@@ -1,0 +1,36 @@
+services:
+  gpu-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.gpu-worker
+      args:
+        INSTALL_OPENFOLD_DEPS: ${INSTALL_OPENFOLD_DEPS:-1}
+    image: openfold3-gpu-worker:local
+    restart: unless-stopped
+    environment:
+      WORKER_ID: ${WORKER_ID:-gpu-worker-1}
+      WORKER_TOKEN: ${WORKER_TOKEN:?WORKER_TOKEN is required}
+      SERVER_URL: ${SERVER_URL:?SERVER_URL is required}
+      PYTHON: ${PYTHON:-python3}
+      OPENFOLD_PROJECT_DIR: /work/OpenFold3_project
+      OPENFOLD_REPO_DIR: /work/OpenFold3_project/openfold-3
+      OPENFOLD_PREFIX: ${OPENFOLD_PREFIX:-}
+      WORKER_RESULTS_DIR: /work/OpenFold3_project/.runtime/gpu_worker
+      WORKER_CACHE_TTL_DAYS: ${WORKER_CACHE_TTL_DAYS:-7}
+      MAX_JOB_RUNTIME_SECONDS: ${MAX_JOB_RUNTIME_SECONDS:-86400}
+      MIN_FREE_DISK_GB: ${MIN_FREE_DISK_GB:-5}
+      WORKER_POLL_INTERVAL_SECONDS: ${WORKER_POLL_INTERVAL_SECONDS:-10}
+      WORKER_HEARTBEAT_INTERVAL_SECONDS: ${WORKER_HEARTBEAT_INTERVAL_SECONDS:-30}
+    volumes:
+      - ./:/work/OpenFold3_project
+      - ${OPENFOLD_WEIGHTS_DIR:-./.runtime/openfold_weights}:/weights
+      - ${OPENFOLD_MSA_CACHE_DIR:-./msa_cache}:/msa_cache
+      - ${OPENFOLD_TRITON_CACHE_DIR:-./.runtime/triton_cache}:/triton_cache
+      - ${WORKER_RESULTS_HOST_DIR:-./.runtime/gpu_worker}:/work/OpenFold3_project/.runtime/gpu_worker
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]

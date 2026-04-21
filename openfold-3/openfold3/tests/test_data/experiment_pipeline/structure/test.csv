@@ -1,0 +1,4 @@
+protein_id,pdb_id,chain,position,wt_residue,mut_residue,experimental_ddg,mutation_id,pdb_residue_id,pdb_path,sequence
+protein-1,1ABC,a,10,A,V,-1.5,A10V,10A,openfold3/tests/test_data/mmcifs/1hf9.cif,CCCCCCCCCAQQ
+protein-2,2XYZ,B,25,G,D,0.8,G25D,25,openfold3/tests/test_data/mmcifs/2crb.cif,AAAAAAAAAAAAAAAAAAAAAAAAG
+protein-3,3QWE,c,7,L,P,2.1,L7P,7B,openfold3/tests/test_data/mmcifs/3u8v.cif,QQQQQQLM

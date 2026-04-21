@@ -440,6 +440,20 @@ class TestInferenceCommandLineSettings:
         )
         assert expt_runner.use_templates == use_templates_cli_arg
 
+    def test_false_cli_args_override_true_config(self, dummy_ckpt_file):
+        expt_config = InferenceExperimentConfig(inference_ckpt_path=dummy_ckpt_file)
+        expt_config.experiment_settings.use_msa_server = True
+        expt_config.experiment_settings.use_templates = True
+
+        expt_runner = InferenceExperimentRunner(
+            expt_config,
+            use_msa_server=False,
+            use_templates=False,
+        )
+
+        assert expt_runner.use_msa_server is False
+        assert expt_runner.use_templates is False
+
     def test_seeding_from_num_seeds(self, dummy_ckpt_file):
         expt_config = InferenceExperimentConfig(inference_ckpt_path=dummy_ckpt_file)
         num_seeds = 7

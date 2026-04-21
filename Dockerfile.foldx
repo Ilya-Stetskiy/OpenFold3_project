@@ -11,21 +11,32 @@ RUN apt-get update \
         procps \
     && rm -rf /var/lib/apt/lists/*
 
-WORKDIR /work/OpenFold3_project
+WORKDIR /work/foldx_worker
 
-COPY openfold-3 ./openfold-3
 COPY foldx_worker ./foldx_worker
+RUN mkdir -p openfold3/benchmark openfold3/testbench
+COPY openfold-3/openfold3/__init__.py ./openfold3/__init__.py
+COPY openfold-3/openfold3/hacks.py ./openfold3/hacks.py
+COPY openfold-3/openfold3/benchmark/cif_utils.py ./openfold3/benchmark/cif_utils.py
+COPY openfold-3/openfold3/benchmark/confidence.py ./openfold3/benchmark/confidence.py
+COPY openfold-3/openfold3/benchmark/foldx_panel.py ./openfold3/benchmark/foldx_panel.py
+COPY openfold-3/openfold3/benchmark/harness.py ./openfold3/benchmark/harness.py
+COPY openfold-3/openfold3/benchmark/local_edit.py ./openfold3/benchmark/local_edit.py
+COPY openfold-3/openfold3/benchmark/methods.py ./openfold3/benchmark/methods.py
+COPY openfold-3/openfold3/benchmark/models.py ./openfold3/benchmark/models.py
+COPY openfold-3/openfold3/benchmark/structure_source.py ./openfold3/benchmark/structure_source.py
+COPY openfold-3/openfold3/testbench/evaluation.py ./openfold3/testbench/evaluation.py
+RUN touch openfold3/benchmark/__init__.py openfold3/testbench/__init__.py
 
 RUN python3 -m pip install --no-cache-dir --upgrade pip \
-    && python3 -m pip install --no-cache-dir numpy packaging requests tqdm \
-    && python3 -m pip install --no-cache-dir --no-deps --editable ./openfold-3
+    && python3 -m pip install --no-cache-dir packaging requests tqdm
 
 RUN mkdir -p /foldx /input /results /cache \
     && chmod -R 777 /foldx /input /results /cache
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONPATH=/work/OpenFold3_project:/work/OpenFold3_project/openfold-3 \
+    PYTHONPATH=/work/foldx_worker \
     OPENFOLD_DISABLE_OPTIONAL_DEEPSPEED_IMPORT=1 \
     FOLDX_BINARY=/foldx/foldx \
     FOLDX_OUTPUT_DIR=/results \

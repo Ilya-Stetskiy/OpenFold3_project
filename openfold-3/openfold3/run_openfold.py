@@ -234,7 +234,6 @@ def align_msa_server(
     More settings can be specified using the `msa_computation_settings_yaml` flag
     An example yaml file is provided in `examples/msa_server.yml`
     """
-    _torch_gpu_setup()
     from openfold3.core.data.tools.colabfold_msa_server import (
         MsaComputationSettings,
         preprocess_colabfold_msas,
