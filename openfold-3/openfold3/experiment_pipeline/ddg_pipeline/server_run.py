@@ -6,6 +6,7 @@ import json
 import math
 import os
 import platform
+import shlex
 import traceback
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -13,7 +14,22 @@ from pathlib import Path
 from typing import Any, Iterable, Sequence
 
 import pandas as pd
-from tqdm import tqdm
+
+try:
+    from tqdm import tqdm
+except ImportError:  # pragma: no cover - server environments normally provide tqdm
+    class _TqdmFallback:
+        def __init__(self, iterable, **_kwargs):
+            self._iterable = iterable
+
+        def __iter__(self):
+            return iter(self._iterable)
+
+        def set_postfix(self, **_kwargs) -> None:
+            return None
+
+    def tqdm(iterable, **kwargs):
+        return _TqdmFallback(iterable, **kwargs)
 
 from openfold3.benchmark.structure_source import extract_protein_sequence
 
@@ -97,24 +113,33 @@ def _structure_sources_for_adapter(adapter: DDGAdapter, config: ServerRunConfig)
     return ("sequence_only",) if adapter.sequence_based else config.structure_sources
 
 
-def _openfold_paths_by_case(structure_results_csv: Path | None) -> dict[str, str]:
+def _structure_paths_by_case(structure_results_csv: Path | None, column: str, status_column: str) -> dict[str, str]:
     if structure_results_csv is None:
         return {}
     if not structure_results_csv.exists():
-        raise FileNotFoundError(f"OpenFold structure results file does not exist: {structure_results_csv}")
+        raise FileNotFoundError(f"Structure results file does not exist: {structure_results_csv}")
     frame = pd.read_csv(structure_results_csv)
-    required = {"case_id", "openfold3_status", "openfold3_path"}
+    required = {"case_id", status_column, column}
     missing = required.difference(frame.columns)
     if missing:
-        raise ValueError(f"OpenFold structure results are missing columns: {', '.join(sorted(missing))}")
+        raise ValueError(f"Structure results are missing columns: {', '.join(sorted(missing))}")
     mapping: dict[str, str] = {}
     for row in frame.to_dict(orient="records"):
-        if str(row.get("openfold3_status", "")).strip() != "success" and str(row.get("openfold3_status", "")).strip() != "ok":
+        status = str(row.get(status_column, "")).strip()
+        if status not in {"success", "ok"}:
             continue
-        path = str(row.get("openfold3_path", "")).strip()
+        path = str(row.get(column, "")).strip()
         if path and Path(path).exists():
             mapping[str(row["case_id"])] = path
     return mapping
+
+
+def _openfold_paths_by_case(structure_results_csv: Path | None) -> dict[str, str]:
+    return _structure_paths_by_case(structure_results_csv, "openfold3_path", "openfold3_status")
+
+
+def _foldx_paths_by_case(structure_results_csv: Path | None) -> dict[str, str]:
+    return _structure_paths_by_case(structure_results_csv, "foldx_path", "foldx_status")
 
 
 def build_structure_dataset(
@@ -174,6 +199,7 @@ def build_canonical_dataset(
         dtype={"pdb_residue_id": str, "chain": str, "pdb_id": str, "protein_id": str},
     )
     openfold_paths = _openfold_paths_by_case(openfold_results_csv)
+    foldx_paths = _foldx_paths_by_case(openfold_results_csv)
     records: list[CanonicalMutationRecord] = []
     rejected: list[dict[str, Any]] = []
     for row in frame.to_dict(orient="records"):
@@ -191,7 +217,7 @@ def build_canonical_dataset(
                 "structure_paths": {
                     "experimental": str(Path(str(row["pdb_path"])).expanduser().resolve()),
                     "openfold": openfold_paths.get(case_id),
-                    "foldx": None,
+                    "foldx": foldx_paths.get(case_id),
                 },
                 "experimental_ddg": None if _is_missing(row.get("experimental_ddg")) else float(row["experimental_ddg"]),
             }
@@ -222,14 +248,31 @@ def split_csv(input_csv: Path, output_dir: Path, shard_count: int, *, prefix: st
 
 
 def merge_structure_results(input_roots: list[Path], output_csv: Path) -> Path:
-    rows: list[dict[str, Any]] = []
+    rows_by_case: dict[str, dict[str, Any]] = {}
     for root in input_roots:
         results_path = root / "results.csv"
         if not results_path.exists():
             raise FileNotFoundError(f"Missing structure results: {results_path}")
         frame = pd.read_csv(results_path)
-        rows.extend(frame.to_dict(orient="records"))
-    rows = sorted(rows, key=lambda row: str(row.get("case_id", "")))
+        for row in frame.to_dict(orient="records"):
+            case_id = str(row.get("case_id", "")).strip()
+            if not case_id:
+                continue
+            merged = rows_by_case.setdefault(
+                case_id,
+                {
+                    "case_id": case_id,
+                    "openfold3_status": "",
+                    "foldx_status": "",
+                    "openfold3_path": "",
+                    "foldx_path": "",
+                },
+            )
+            for key in ("openfold3_status", "foldx_status", "openfold3_path", "foldx_path"):
+                value = row.get(key, "")
+                if not _is_missing(value):
+                    merged[key] = value
+    rows = sorted(rows_by_case.values(), key=lambda row: str(row.get("case_id", "")))
     output_csv.parent.mkdir(parents=True, exist_ok=True)
     pd.DataFrame(rows).to_csv(output_csv, index=False)
     return output_csv
@@ -494,6 +537,204 @@ def write_server_plan(
     return commands_path
 
 
+def _shell_join(parts: Sequence[object]) -> str:
+    return " ".join(shlex.quote(str(part)) for part in parts)
+
+
+def write_batched_server_plan(
+    output_root: Path,
+    *,
+    processed_csv: Path,
+    batch_count: int,
+    methods: tuple[str, ...],
+    structure_sources: tuple[str, ...],
+    foldx_runs: int,
+    rosetta_runs: int,
+    rosetta_top_k: int,
+    openfold_python: str,
+    openfold_runner_yaml: Path | None,
+    openfold_ckpt: Path | None,
+) -> Path:
+    commands_path = output_root / "server_batched_commands.sh"
+    structure_csv = output_root / "data" / "structure_dataset.csv"
+    structure_batch_dir = output_root / "data" / "structure_batches"
+    batch_results_dir = output_root / "data" / "structure_batch_results"
+    canonical_batch_dir = output_root / "data" / "canonical_batches"
+    structure_output = output_root / "structure_batches"
+    ddg_output = output_root / "ddg_batches"
+    logs_dir = output_root / "logs"
+
+    commands = [
+        "#!/usr/bin/env bash",
+        "set -euo pipefail",
+        _shell_join(
+            [
+                "python",
+                "-m",
+                "openfold3.experiment_pipeline.ddg_pipeline.server_run",
+                "prepare-structure-dataset",
+                "--processed-csv",
+                processed_csv,
+                "--output-csv",
+                structure_csv,
+                "--rejected-csv",
+                output_root / "data" / "structure_rejected.csv",
+            ]
+        ),
+        _shell_join(
+            [
+                "python",
+                "-m",
+                "openfold3.experiment_pipeline.ddg_pipeline.server_run",
+                "split-csv",
+                "--input-csv",
+                structure_csv,
+                "--output-dir",
+                structure_batch_dir,
+                "--shard-count",
+                batch_count,
+            ]
+        ),
+        _shell_join(["mkdir", "-p", logs_dir, batch_results_dir, canonical_batch_dir]),
+        "",
+    ]
+
+    for batch_index in range(batch_count):
+        batch_name = f"batch_{batch_index:04d}"
+        batch_csv = structure_batch_dir / f"shard_{batch_index:04d}.csv"
+        openfold_root = structure_output / batch_name / "openfold3"
+        foldx_root = structure_output / batch_name / "foldx"
+        batch_results_csv = batch_results_dir / f"{batch_name}.csv"
+        canonical_json = canonical_batch_dir / f"{batch_name}.json"
+        ddg_root = ddg_output / batch_name
+
+        openfold_command = [
+            "python",
+            "-m",
+            "openfold3.experiment_pipeline.structure.cli",
+            "--dataset",
+            batch_csv,
+            "--output-dir",
+            openfold_root,
+            "--backend",
+            "openfold3",
+            "--openfold-python",
+            openfold_python,
+        ]
+        if openfold_runner_yaml is not None:
+            openfold_command.extend(["--openfold-runner-yaml", openfold_runner_yaml])
+        if openfold_ckpt is not None:
+            openfold_command.extend(["--openfold-inference-ckpt-path", openfold_ckpt])
+
+        foldx_command = [
+            "python",
+            "-m",
+            "openfold3.experiment_pipeline.structure.cli",
+            "--dataset",
+            batch_csv,
+            "--output-dir",
+            foldx_root,
+            "--backend",
+            "foldx",
+        ]
+
+        commands.extend(
+            [
+                f"echo '[BATCH {batch_index + 1}/{batch_count}] structure generation'",
+                f"{_shell_join(openfold_command)} > {shlex.quote(str(logs_dir / f'{batch_name}_openfold3.log'))} 2>&1 &",
+                "OPENFOLD_PID=$!",
+                f"{_shell_join(foldx_command)} > {shlex.quote(str(logs_dir / f'{batch_name}_foldx.log'))} 2>&1 &",
+                "FOLDX_PID=$!",
+                "OPENFOLD_STATUS=0",
+                "FOLDX_STATUS=0",
+                'wait "$OPENFOLD_PID" || OPENFOLD_STATUS=$?',
+                'wait "$FOLDX_PID" || FOLDX_STATUS=$?',
+                'if [ "$OPENFOLD_STATUS" -ne 0 ] || [ "$FOLDX_STATUS" -ne 0 ]; then',
+                f"  echo '[BATCH {batch_index + 1}/{batch_count}] structure generation failed' >&2",
+                '  exit 1',
+                "fi",
+                _shell_join(
+                    [
+                        "python",
+                        "-m",
+                        "openfold3.experiment_pipeline.ddg_pipeline.server_run",
+                        "merge-structure-results",
+                        "--output-csv",
+                        batch_results_csv,
+                        "--input-roots",
+                        openfold_root,
+                        foldx_root,
+                    ]
+                ),
+                _shell_join(
+                    [
+                        "python",
+                        "-m",
+                        "openfold3.experiment_pipeline.ddg_pipeline.server_run",
+                        "prepare-ddg-dataset",
+                        "--structure-csv",
+                        batch_csv,
+                        "--output-json",
+                        canonical_json,
+                        "--rejected-csv",
+                        output_root / "data" / f"{batch_name}_ddg_rejected.csv",
+                        "--openfold-results-csv",
+                        batch_results_csv,
+                    ]
+                ),
+                f"echo '[BATCH {batch_index + 1}/{batch_count}] ddG predictions'",
+                _shell_join(
+                    [
+                        "python",
+                        "-m",
+                        "openfold3.experiment_pipeline.ddg_pipeline.server_run",
+                        "run-ddg-shard",
+                        "--canonical-json",
+                        canonical_json,
+                        "--output-root",
+                        ddg_root,
+                        "--shard-index",
+                        0,
+                        "--shard-count",
+                        1,
+                        "--methods",
+                        ",".join(methods),
+                        "--structure-sources",
+                        ",".join(structure_sources),
+                        "--foldx-runs",
+                        foldx_runs,
+                        "--rosetta-runs",
+                        rosetta_runs,
+                        "--rosetta-top-k",
+                        rosetta_top_k,
+                    ]
+                ),
+                "",
+            ]
+        )
+
+    merge_roots = [ddg_output / f"batch_{index:04d}" for index in range(batch_count)]
+    commands.append(
+        _shell_join(
+            [
+                "python",
+                "-m",
+                "openfold3.experiment_pipeline.ddg_pipeline.server_run",
+                "merge-results",
+                "--output-root",
+                output_root / "merged",
+                "--input-roots",
+                *merge_roots,
+            ]
+        )
+    )
+
+    commands_path.parent.mkdir(parents=True, exist_ok=True)
+    commands_path.write_text("\n".join(commands) + "\n", encoding="utf-8")
+    commands_path.chmod(0o755)
+    return commands_path
+
+
 def _parse_methods(text: str) -> tuple[str, ...]:
     return tuple(method.strip() for method in text.split(",") if method.strip())
 
@@ -553,6 +794,19 @@ def build_parser() -> argparse.ArgumentParser:
     plan.add_argument("--openfold-python", default="python")
     plan.add_argument("--openfold-runner-yaml", type=Path, default=None)
     plan.add_argument("--openfold-inference-ckpt-path", type=Path, default=None)
+
+    batched_plan = subparsers.add_parser("write-batched-server-plan")
+    batched_plan.add_argument("--processed-csv", type=Path, required=True)
+    batched_plan.add_argument("--output-root", type=Path, required=True)
+    batched_plan.add_argument("--batch-count", type=int, default=max(1, (os.cpu_count() or 1) // 8))
+    batched_plan.add_argument("--methods", default="foldx,rosetta,esm2")
+    batched_plan.add_argument("--structure-sources", default="experimental,openfold")
+    batched_plan.add_argument("--foldx-runs", type=int, default=5)
+    batched_plan.add_argument("--rosetta-runs", type=int, default=20)
+    batched_plan.add_argument("--rosetta-top-k", type=int, default=3)
+    batched_plan.add_argument("--openfold-python", default="python")
+    batched_plan.add_argument("--openfold-runner-yaml", type=Path, default=None)
+    batched_plan.add_argument("--openfold-inference-ckpt-path", type=Path, default=None)
     return parser
 
 
@@ -630,6 +884,22 @@ def main(argv: Sequence[str] | None = None) -> int:
             openfold_ckpt=args.openfold_inference_ckpt_path,
         )
         print(f"Server command plan: {commands_path}")
+        return 0
+    if args.command == "write-batched-server-plan":
+        commands_path = write_batched_server_plan(
+            args.output_root.resolve(),
+            processed_csv=args.processed_csv.resolve(),
+            batch_count=args.batch_count,
+            methods=_parse_methods(args.methods),
+            structure_sources=_parse_methods(args.structure_sources),
+            foldx_runs=args.foldx_runs,
+            rosetta_runs=args.rosetta_runs,
+            rosetta_top_k=args.rosetta_top_k,
+            openfold_python=args.openfold_python,
+            openfold_runner_yaml=args.openfold_runner_yaml,
+            openfold_ckpt=args.openfold_inference_ckpt_path,
+        )
+        print(f"Batched server command plan: {commands_path}")
         return 0
     raise AssertionError(f"Unhandled command: {args.command}")
 

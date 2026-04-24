@@ -7,7 +7,11 @@ from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Iterable, Mapping, Protocol
 
-from tqdm import tqdm
+try:
+    from tqdm import tqdm
+except ImportError:  # pragma: no cover - server environments normally provide tqdm
+    def tqdm(iterable, **_kwargs):
+        return iterable
 
 from .cache import is_cached
 from .manifest import load_manifest, manifest_entry_from_result, save_manifest
