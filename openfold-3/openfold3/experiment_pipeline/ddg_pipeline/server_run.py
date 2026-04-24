@@ -142,6 +142,24 @@ def _foldx_paths_by_case(structure_results_csv: Path | None) -> dict[str, str]:
     return _structure_paths_by_case(structure_results_csv, "foldx_path", "foldx_status")
 
 
+def _sequence_from_processed_record(record: dict[str, Any], pdb_path: Path) -> tuple[str, str]:
+    for column in ("sequence", "pdb_sequence"):
+        value = record.get(column)
+        if not _is_missing(value):
+            sequence = str(value).strip().upper()
+            if sequence:
+                return sequence, column
+    return extract_protein_sequence(pdb_path, str(record["chain"])), "pdb_path"
+
+
+def _reject_reason_counts(rejected: list[dict[str, Any]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for row in rejected:
+        reason = str(row.get("reject_reason", "unknown"))
+        counts[reason] = counts.get(reason, 0) + 1
+    return dict(sorted(counts.items(), key=lambda item: (-item[1], item[0])))
+
+
 def build_structure_dataset(
     processed_csv: Path,
     output_csv: Path,
@@ -165,11 +183,11 @@ def build_structure_dataset(
             if require_position_residue_id_match and pdb_residue_id != str(position):
                 raise ValueError("position_does_not_match_pdb_residue_id")
             pdb_path = Path(str(record["pdb_path"])).expanduser().resolve()
-            sequence = extract_protein_sequence(pdb_path, str(record["chain"]))
+            sequence, sequence_source = _sequence_from_processed_record(record, pdb_path)
             if position < 1 or position > len(sequence):
                 raise ValueError("position_outside_sequence")
             if sequence[position - 1] != wt:
-                raise ValueError("sequence_wt_mismatch")
+                raise ValueError(f"sequence_wt_mismatch:{sequence_source}")
             row = dict(record)
             row["sequence"] = sequence
             rows.append(row)
@@ -826,6 +844,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         print(f"Prepared structure dataset rows: {len(rows)}")
         print(f"Output: {args.output_csv}")
+        if not rows:
+            rejected = pd.read_csv(args.rejected_csv).to_dict(orient="records")
+            reason_counts = _reject_reason_counts(rejected)
+            print("Reject reasons:")
+            for reason, count in list(reason_counts.items())[:10]:
+                print(f"  {count}: {reason}")
+            raise RuntimeError(f"No valid structure dataset rows; inspect {args.rejected_csv}")
         return 0
     if args.command == "prepare-ddg-dataset":
         records = build_canonical_dataset(
