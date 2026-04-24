@@ -273,6 +273,10 @@ def _esm2_torch_home_windows() -> str:
     return _to_windows_path(repo_root / ".torch-cache")
 
 
+def _esm2_device() -> str:
+    return os.environ.get("ESM2_DEVICE", "auto")
+
+
 def _esm2_inference_script_windows() -> str:
     return _to_windows_path(Path(__file__).with_name("esm2_inference.py"))
 
@@ -285,6 +289,7 @@ def _collect_esm2_environment_check() -> dict[str, Any]:
         return {
             "python_executable": None,
             "torch_home": _esm2_torch_home_windows(),
+            "esm2_device": _esm2_device(),
             "missing_components": missing,
         }
     output_path = _workspace_root(Path(__file__)) / ".torch-cache" / "esm2_environment_check_runtime.json"
@@ -298,6 +303,8 @@ def _collect_esm2_environment_check() -> dict[str, Any]:
         _to_windows_path(output_path),
         "--torch-home",
         _esm2_torch_home_windows(),
+        "--device",
+        _esm2_device(),
     ]
     env = dict(os.environ)
     env["TORCH_HOME"] = _esm2_torch_home_windows()
@@ -305,6 +312,7 @@ def _collect_esm2_environment_check() -> dict[str, Any]:
     payload: dict[str, Any] = {
         "python_executable": python_executable,
         "torch_home": env["TORCH_HOME"],
+        "esm2_device": _esm2_device(),
         "command": command,
         "returncode": process.returncode,
         "stdout": process.stdout,
@@ -1323,6 +1331,8 @@ class ESM2Adapter(DDGAdapter):
             _to_windows_path(runtime_raw_output_path),
             "--torch-home",
             _esm2_torch_home_windows(),
+            "--device",
+            _esm2_device(),
         ]
         env = dict(os.environ)
         env["TORCH_HOME"] = _esm2_torch_home_windows()
@@ -1336,6 +1346,7 @@ class ESM2Adapter(DDGAdapter):
                     "stdout": process.stdout,
                     "stderr": process.stderr,
                     "torch_home": env["TORCH_HOME"],
+                    "esm2_device": _esm2_device(),
                 },
                 indent=2,
                 sort_keys=True,
@@ -1354,6 +1365,7 @@ class ESM2Adapter(DDGAdapter):
                         "stderr": process.stderr,
                         "environment_check_path": str(environment_check_path),
                         "backend_logs_path": str(backend_logs_path),
+                        "esm2_device": _esm2_device(),
                     },
                     indent=2,
                     sort_keys=True,
@@ -1386,6 +1398,8 @@ class ESM2Adapter(DDGAdapter):
                 {
                     "loaded": payload.get("loaded"),
                     "device": payload.get("device"),
+                    "requested_device": payload.get("requested_device"),
+                    "selected_device": payload.get("selected_device"),
                     "dtype": payload.get("dtype"),
                     "parameter_count": payload.get("parameter_count"),
                     "alphabet_size": payload.get("alphabet_size"),

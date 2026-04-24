@@ -7,12 +7,33 @@ import os
 from pathlib import Path
 
 
-def _load_model():
+def _select_device(requested: str):
+    import torch
+
+    normalized = requested.strip().lower()
+    if normalized == "auto":
+        return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    if normalized == "cuda":
+        if not torch.cuda.is_available():
+            raise RuntimeError("ESM2_DEVICE=cuda was requested, but CUDA is not available")
+        return torch.device("cuda")
+    if normalized.startswith("cuda:"):
+        if not torch.cuda.is_available():
+            raise RuntimeError(f"ESM2_DEVICE={requested} was requested, but CUDA is not available")
+        return torch.device(normalized)
+    if normalized == "cpu":
+        return torch.device("cpu")
+    raise ValueError(f"Unsupported ESM2 device: {requested}")
+
+
+def _load_model(device_name: str):
     import esm
 
+    device = _select_device(device_name)
     model, alphabet = esm.pretrained.esm2_t33_650M_UR50D()
     model.eval()
-    return model, alphabet
+    model.to(device)
+    return model, alphabet, device
 
 
 def _pseudo_log_likelihood(model, alphabet, sequence: str) -> float:
@@ -38,13 +59,15 @@ def _pseudo_log_likelihood(model, alphabet, sequence: str) -> float:
     return float(log_probability)
 
 
-def _mode_check(output_path: Path) -> int:
+def _mode_check(output_path: Path, device_name: str) -> int:
     payload: dict[str, object] = {}
+    payload["requested_device"] = device_name
     try:
         import torch
 
         payload["torch_version"] = torch.__version__
         payload["cuda_available"] = torch.cuda.is_available()
+        payload["selected_device"] = str(_select_device(device_name))
     except Exception as exc:  # noqa: BLE001
         payload["torch_error"] = f"{type(exc).__name__}: {exc}"
     try:
@@ -59,11 +82,11 @@ def _mode_check(output_path: Path) -> int:
     return 0
 
 
-def _mode_infer(prepared_input_path: Path, output_path: Path) -> int:
+def _mode_infer(prepared_input_path: Path, output_path: Path, device_name: str) -> int:
     import torch
 
     payload = json.loads(prepared_input_path.read_text(encoding="utf-8"))
-    model, alphabet = _load_model()
+    model, alphabet, selected_device = _load_model(device_name)
     first_param = next(model.parameters())
     wt_sequence = str(payload["wt_sequence"])
     mutant_sequence = str(payload["mutant_sequence"])
@@ -74,6 +97,8 @@ def _mode_infer(prepared_input_path: Path, output_path: Path) -> int:
         raise ValueError("NaN ESM2 ddG value")
     result = {
         "loaded": True,
+        "requested_device": device_name,
+        "selected_device": str(selected_device),
         "device": str(first_param.device),
         "dtype": str(first_param.dtype),
         "parameter_count": sum(parameter.numel() for parameter in model.parameters()),
@@ -101,6 +126,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--prepared-input", type=Path, default=None)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--torch-home", type=str, default=None)
+    parser.add_argument("--device", type=str, default=os.environ.get("ESM2_DEVICE", "auto"))
     return parser
 
 
@@ -111,10 +137,10 @@ def main(argv: list[str] | None = None) -> int:
         os.environ["TORCH_HOME"] = args.torch_home
     args.output.parent.mkdir(parents=True, exist_ok=True)
     if args.mode == "check":
-        return _mode_check(args.output)
+        return _mode_check(args.output, args.device)
     if args.prepared_input is None:
         raise ValueError("--prepared-input is required for infer mode")
-    return _mode_infer(args.prepared_input, args.output)
+    return _mode_infer(args.prepared_input, args.output, args.device)
 
 
 if __name__ == "__main__":

@@ -67,6 +67,7 @@ The pipeline saves:
 - Rosetta `database/`
 - Anaconda or another local Python with `torch` and `fair-esm`
 - local ESM2 checkpoint cache reachable through `TORCH_HOME`
+- optional `ESM2_DEVICE=auto|cuda|cuda:0|cpu`; use `cuda` to fail explicitly when GPU is unavailable
 - writable working directories for FoldX temporary files
 - writable working directories for Rosetta run directories
 - writable working directories for ESM2 runtime files
