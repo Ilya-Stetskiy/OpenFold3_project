@@ -64,7 +64,7 @@ class OpenFold3Backend:
             shutil.rmtree(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        fasta_path = input_dir / "mutant.fasta"
+        fasta_path = input_dir / "wt.fasta"
         fasta_path.write_text(f">{case.case_id}\n{sequence}\n", encoding="utf-8")
 
         query_json_path = input_dir / "query.json"

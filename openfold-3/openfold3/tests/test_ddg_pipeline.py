@@ -34,6 +34,9 @@ from openfold3.experiment_pipeline.ddg_pipeline.runners.pipeline import (
 )
 from openfold3.experiment_pipeline.ddg_pipeline.server_run import (
     ServerRunConfig,
+    _parse_structure_sources,
+    build_canonical_dataset,
+    build_structure_dataset,
     merge_structure_results,
     run_ddg_shard,
     split_csv,
@@ -928,3 +931,54 @@ def test_server_run_merge_structure_results(tmp_path):
     output_csv = merge_structure_results([root_a, root_b], tmp_path / "merged.csv")
     rows = list(csv.DictReader(output_csv.open(encoding="utf-8")))
     assert [row["case_id"] for row in rows] == ["case_a", "case_b"]
+
+
+def test_server_structure_dataset_requires_existing_pdb_path(tmp_path):
+    input_csv = tmp_path / "processed.csv"
+    input_csv.write_text(
+        "protein_id,pdb_id,chain,position,wt_residue,mut_residue,experimental_ddg,mutation_id,pdb_residue_id,pdb_path,pdb_sequence\n"
+        f"p1,1ABC,A,1,L,A,0.1,L1A,10,{tmp_path / 'missing.pdb'},L\n",
+        encoding="utf-8",
+    )
+
+    rows = build_structure_dataset(input_csv, tmp_path / "structure.csv", tmp_path / "rejected.csv")
+
+    assert rows == []
+    rejected = list(csv.DictReader((tmp_path / "rejected.csv").open(encoding="utf-8")))
+    assert "FileNotFoundError" in rejected[0]["reject_reason"]
+
+
+def test_server_canonical_dataset_does_not_use_foldx_mutant_as_structure_source(tmp_path):
+    pdb_path = tmp_path / "input.pdb"
+    pdb_path.write_text("MODEL\nEND\n", encoding="utf-8")
+    structure_csv = tmp_path / "structure.csv"
+    structure_csv.write_text(
+        "protein_id,pdb_id,chain,position,wt_residue,mut_residue,experimental_ddg,mutation_id,pdb_residue_id,pdb_path,sequence\n"
+        f"p1,1ABC,A,1,L,A,0.1,L1A,1,{pdb_path},L\n",
+        encoding="utf-8",
+    )
+    openfold_path = tmp_path / "model.cif"
+    foldx_path = tmp_path / "mutant.pdb"
+    openfold_path.write_text("data_model\n#\n", encoding="utf-8")
+    foldx_path.write_text("MODEL\nEND\n", encoding="utf-8")
+    structure_results = tmp_path / "structure_results.csv"
+    structure_results.write_text(
+        "case_id,openfold3_status,foldx_status,openfold3_path,foldx_path\n"
+        f"p1__L1A,ok,ok,{openfold_path},{foldx_path}\n",
+        encoding="utf-8",
+    )
+
+    records = build_canonical_dataset(
+        structure_csv,
+        tmp_path / "canonical.json",
+        tmp_path / "rejected.csv",
+        openfold_results_csv=structure_results,
+    )
+
+    assert records[0].structure_paths.openfold == str(openfold_path)
+    assert records[0].structure_paths.foldx is None
+
+
+def test_server_run_rejects_foldx_structure_source():
+    with pytest.raises(ValueError, match="foldx outputs are mutant structures"):
+        _parse_structure_sources("experimental,foldx")

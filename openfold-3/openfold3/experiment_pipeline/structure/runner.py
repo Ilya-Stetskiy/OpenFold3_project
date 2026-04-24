@@ -83,7 +83,7 @@ class StructureRunner:
                 )
                 continue
 
-            result = self._run_backend_safely(backend, case, case_dir, mutated_sequence)
+            result = self._run_backend_safely(backend, case, case_dir, sequence)
             manifest_payload[backend_name] = manifest_entry_from_result(result, self.config_hash)
             save_manifest(manifest_path, manifest_payload)
             backend_results.append(result)
@@ -145,10 +145,10 @@ class StructureRunner:
         backend: StructureBackend,
         case: MutationCase,
         case_dir: Path,
-        mutated_sequence: str,
+        sequence: str,
     ) -> BackendResult:
         try:
-            return self._run_backend(backend, case, case_dir, mutated_sequence)
+            return self._run_backend(backend, case, case_dir, sequence)
         except BackendContractError as exc:
             print(f"[CONTRACT ERROR] backend={backend.backend_name} {exc}")
             raise
@@ -168,7 +168,7 @@ class StructureRunner:
         backend: StructureBackend,
         case: MutationCase,
         case_dir: Path,
-        mutated_sequence: str,
+        sequence: str,
     ) -> BackendResult:
         run = getattr(backend, "run")
         signature = inspect.signature(run)
@@ -188,7 +188,7 @@ class StructureRunner:
         if len(positional_parameters) == 3:
             return run(case, case_dir, self.config_hash)
         if len(positional_parameters) == 4:
-            return run(case, case_dir, self.config_hash, mutated_sequence)
+            return run(case, case_dir, self.config_hash, sequence)
         raise BackendContractError(
             f"Unsupported backend.run signature for {backend.backend_name}: {signature}"
         )

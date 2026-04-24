@@ -184,7 +184,7 @@ FoldX backend:
 
 ### OpenFold3 backend
 OpenFold3 backend:
-- пишет `mutant.fasta`
+- пишет `wt.fasta`
 - пишет минимальный `query.json`
 - вызывает `python -m openfold3.run_openfold predict`
 - чистит `openfold3/output/` перед rerun
@@ -421,7 +421,7 @@ The FoldX backend:
 
 ### OpenFold3 backend
 The OpenFold3 backend:
-- writes `mutant.fasta`
+- writes `wt.fasta`
 - writes a minimal `query.json`
 - runs `python -m openfold3.run_openfold predict`
 - cleans `openfold3/output/` before reruns

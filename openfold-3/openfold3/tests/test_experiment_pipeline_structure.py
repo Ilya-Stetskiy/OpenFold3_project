@@ -134,12 +134,12 @@ class RecordingFourArgBackend:
     backend_name: str = "openfold3"
     seen_sequence: str | None = None
 
-    def run(self, case: MutationCase, case_dir: Path, config_hash: str, mutated_sequence: str) -> BackendResult:
-        self.seen_sequence = mutated_sequence
+    def run(self, case: MutationCase, case_dir: Path, config_hash: str, sequence: str) -> BackendResult:
+        self.seen_sequence = sequence
         output_dir = case_dir / self.backend_name
         output_dir.mkdir(parents=True, exist_ok=True)
         artifact_path = output_dir / "model.cif"
-        artifact_path.write_text(mutated_sequence, encoding="utf-8")
+        artifact_path.write_text(sequence, encoding="utf-8")
         return BackendResult(
             backend_name=self.backend_name,
             status="ok",
@@ -546,6 +546,9 @@ def test_openfold_backend_builds_command_and_returns_success(tmp_path, monkeypat
         str((tmp_path / "case-root" / "openfold3" / "output").resolve()),
     ]
     payload = json.loads((tmp_path / "case-root" / "openfold3" / "input" / "query.json").read_text(encoding="utf-8"))
+    assert (tmp_path / "case-root" / "openfold3" / "input" / "wt.fasta").read_text(encoding="utf-8") == (
+        ">protein-1__L1A\nA\n"
+    )
     assert payload["queries"]["protein-1__L1A"]["chains"][0]["sequence"] == "A"
     assert "[OF3] Found 1 CIF candidates" in capsys.readouterr().out
 
@@ -621,7 +624,7 @@ def test_runner_dispatches_four_argument_backend_signature(tmp_path):
     manifest = runner.run_case(cases[0], sequences_by_case_id[cases[0].case_id])
 
     assert manifest.backend_results[0].status == "ok"
-    assert backend.seen_sequence == "CCCCCCCCCVQQ"
+    assert backend.seen_sequence == "CCCCCCCCCAQQ"
 
 
 def test_runner_raises_backend_contract_error_for_unexpected_signature(tmp_path, capsys):

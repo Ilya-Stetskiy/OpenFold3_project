@@ -165,6 +165,7 @@ The ddG shard runner writes one row artifact per method/case under `outputs/rows
 - mixed-method metrics exclude non-kcal/mol rows, so Rosetta rows are not folded into the same numeric benchmark metrics as FoldX
 - mixed-method metrics exclude non-kcal/mol rows, so ESM2 rows are also excluded from the same numeric benchmark metrics as FoldX
 - shared tabular outputs include an explicit `unit` field because FoldX, Rosetta, and ESM2 are not numerically comparable without it
+- `foldx` structure-stage outputs are mutant structures and are not valid WT structure sources for FoldX/Rosetta ddG; server ddG runs accept `experimental` and `openfold` structure sources only
 - metrics are skipped when fewer than 5 successful predictions are available
 - validation depends on a FoldX environment that actually writes the repaired PDB artifact
 

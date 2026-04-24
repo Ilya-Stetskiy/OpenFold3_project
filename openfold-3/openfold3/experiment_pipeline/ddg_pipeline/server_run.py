@@ -138,10 +138,6 @@ def _openfold_paths_by_case(structure_results_csv: Path | None) -> dict[str, str
     return _structure_paths_by_case(structure_results_csv, "openfold3_path", "openfold3_status")
 
 
-def _foldx_paths_by_case(structure_results_csv: Path | None) -> dict[str, str]:
-    return _structure_paths_by_case(structure_results_csv, "foldx_path", "foldx_status")
-
-
 def _sequence_from_processed_record(record: dict[str, Any], pdb_path: Path) -> tuple[str, str]:
     for column in ("sequence", "pdb_sequence"):
         value = record.get(column)
@@ -183,6 +179,8 @@ def build_structure_dataset(
             if require_position_residue_id_match and pdb_residue_id != str(position):
                 raise ValueError("position_does_not_match_pdb_residue_id")
             pdb_path = Path(str(record["pdb_path"])).expanduser().resolve()
+            if not pdb_path.exists():
+                raise FileNotFoundError(str(pdb_path))
             sequence, sequence_source = _sequence_from_processed_record(record, pdb_path)
             if position < 1 or position > len(sequence):
                 raise ValueError("position_outside_sequence")
@@ -221,7 +219,6 @@ def build_canonical_dataset(
         dtype={"pdb_residue_id": str, "chain": str, "pdb_id": str, "protein_id": str},
     )
     openfold_paths = _openfold_paths_by_case(openfold_results_csv)
-    foldx_paths = _foldx_paths_by_case(openfold_results_csv)
     records: list[CanonicalMutationRecord] = []
     rejected: list[dict[str, Any]] = []
     for row in frame.to_dict(orient="records"):
@@ -239,7 +236,7 @@ def build_canonical_dataset(
                 "structure_paths": {
                     "experimental": str(Path(str(row["pdb_path"])).expanduser().resolve()),
                     "openfold": openfold_paths.get(case_id),
-                    "foldx": foldx_paths.get(case_id),
+                    "foldx": None,
                 },
                 "experimental_ddg": None if _is_missing(row.get("experimental_ddg")) else float(row["experimental_ddg"]),
             }
@@ -761,6 +758,18 @@ def _parse_methods(text: str) -> tuple[str, ...]:
     return tuple(method.strip() for method in text.split(",") if method.strip())
 
 
+def _parse_structure_sources(text: str) -> tuple[str, ...]:
+    sources = _parse_methods(text)
+    unsupported = sorted(set(sources).difference({"experimental", "openfold"}))
+    if unsupported:
+        raise ValueError(
+            "Unsupported ddG structure sources: "
+            + ", ".join(unsupported)
+            + ". Use experimental/openfold; foldx outputs are mutant structures, not WT ddG inputs."
+        )
+    return sources
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Server-run orchestration for OpenFold -> ddG benchmark jobs.")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -886,7 +895,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             ServerRunConfig(
                 output_root=args.output_root.resolve(),
                 methods=methods,
-                structure_sources=_parse_methods(args.structure_sources),
+                structure_sources=_parse_structure_sources(args.structure_sources),
                 shard_index=args.shard_index,
                 shard_count=args.shard_count,
                 resume=not args.no_resume,
@@ -920,7 +929,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             processed_csv=args.processed_csv.resolve(),
             batch_count=args.batch_count,
             methods=_parse_methods(args.methods),
-            structure_sources=_parse_methods(args.structure_sources),
+            structure_sources=_parse_structure_sources(args.structure_sources),
             foldx_runs=args.foldx_runs,
             rosetta_runs=args.rosetta_runs,
             rosetta_top_k=args.rosetta_top_k,
