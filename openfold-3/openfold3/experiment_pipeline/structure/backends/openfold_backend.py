@@ -19,13 +19,15 @@ def _model_path_from_confidence_path(path: Path) -> Path | None:
     return None
 
 
-def _select_ranked_cif(output_dir: Path) -> Path | None:
+def _select_ranked_cif(output_dir: Path, query_id: str | None = None) -> Path | None:
     ranked_candidates: list[tuple[float, int, Path]] = []
     for summary_path in sorted(output_dir.rglob("summary.jsonl")):
         for line_number, line in enumerate(summary_path.read_text(encoding="utf-8").splitlines(), start=1):
             if not line.strip():
                 continue
             payload = json.loads(line)
+            if query_id is not None and str(payload.get("query_id", "")) != query_id:
+                continue
             score = payload.get("sample_ranking_score")
             confidence_path = payload.get("aggregated_confidence_path")
             if score is None or confidence_path is None:
@@ -67,14 +69,14 @@ def _is_preferred_cif_name(path: Path) -> bool:
     return "final" in name or ("model" in name and "intermediate" not in name)
 
 
-def _select_output_cif(cif_candidates: list[Path], output_dir: Path) -> Path:
+def _select_output_cif(cif_candidates: list[Path], output_dir: Path, query_id: str | None = None) -> Path:
     print(f"[OF3] Found {len(cif_candidates)} CIF candidates")
     if not cif_candidates:
         raise RuntimeError("OpenFold3 completed but no CIF output was found")
     if len(cif_candidates) == 1:
         return cif_candidates[0]
 
-    ranked = _select_ranked_cif(output_dir)
+    ranked = _select_ranked_cif(output_dir, query_id=query_id)
     if ranked is not None:
         return ranked
 

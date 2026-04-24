@@ -156,6 +156,8 @@ The generated `server_commands.sh` performs the full staged workflow:
 
 The ddG shard runner writes one row artifact per method/case under `outputs/rows/`, then rewrites `outputs/results.csv` after each completed method. This makes long jobs resumable and prevents losing completed FoldX, Rosetta, or ESM2 results if a later case fails.
 
+OpenFold server shards should use `server_run run-openfold-shard`, which builds one multi-query `query.json` per shard and initializes OpenFold once for the whole shard instead of once per mutation case.
+
 ## Limitations
 
 - only single-point mutations are supported

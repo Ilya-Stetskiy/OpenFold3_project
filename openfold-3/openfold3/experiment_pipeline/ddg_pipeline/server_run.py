@@ -7,6 +7,8 @@ import math
 import os
 import platform
 import shlex
+import shutil
+import subprocess
 import traceback
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -32,6 +34,9 @@ except ImportError:  # pragma: no cover - server environments normally provide t
         return _TqdmFallback(iterable, **kwargs)
 
 from openfold3.benchmark.structure_source import extract_protein_sequence
+from openfold3.experiment_pipeline.structure.backends.openfold_backend import _select_output_cif
+from openfold3.experiment_pipeline.structure.manifest import manifest_entry_from_result, save_manifest
+from openfold3.experiment_pipeline.structure.models import BackendResult, MutationCase
 
 from .adapters import DDGAdapter, ESM2Adapter, FoldXAdapter, RosettaDDGAdapter
 from .adapters.base import AdapterResult
@@ -297,6 +302,150 @@ def merge_structure_results(input_roots: list[Path], output_csv: Path) -> Path:
     return output_csv
 
 
+def _openfold_query_payload(case: MutationCase, sequence: str) -> dict[str, object]:
+    return {
+        "chains": [
+            {
+                "molecule_type": "protein",
+                "chain_ids": [case.chain],
+                "sequence": sequence,
+            }
+        ]
+    }
+
+
+def _write_openfold_shard_results(output_root: Path, rows: list[dict[str, Any]]) -> Path:
+    results_path = output_root / "results.csv"
+    results_path.parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(
+        sorted(rows, key=lambda row: str(row.get("case_id", ""))),
+        columns=["case_id", "openfold3_status", "foldx_status", "openfold3_path", "foldx_path"],
+    ).to_csv(results_path, index=False)
+    return results_path
+
+
+def run_openfold_shard(
+    structure_csv: Path,
+    output_root: Path,
+    *,
+    openfold_python: str,
+    openfold_runner_yaml: Path | None = None,
+    openfold_ckpt: Path | None = None,
+) -> Path:
+    frame = pd.read_csv(
+        structure_csv,
+        dtype={"pdb_residue_id": str, "chain": str, "pdb_id": str, "protein_id": str},
+    )
+    cases = [MutationCase.from_row(row) for row in frame.to_dict(orient="records")]
+    sequences = {case.case_id: str(row["sequence"]).strip().upper() for case, row in zip(cases, frame.to_dict(orient="records"), strict=True)}
+
+    input_dir = output_root / "openfold3_batch" / "input"
+    batch_output_dir = output_root / "openfold3_batch" / "output"
+    input_dir.mkdir(parents=True, exist_ok=True)
+    if batch_output_dir.exists():
+        shutil.rmtree(batch_output_dir)
+    batch_output_dir.mkdir(parents=True, exist_ok=True)
+
+    query_json_path = input_dir / "query.json"
+    query_json_path.write_text(
+        json.dumps(
+            {"queries": {case.case_id: _openfold_query_payload(case, sequences[case.case_id]) for case in cases}},
+            indent=2,
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+
+    command = [
+        openfold_python,
+        "-m",
+        "openfold3.run_openfold",
+        "predict",
+        "--query-json",
+        str(query_json_path),
+        "--output-dir",
+        str(batch_output_dir),
+    ]
+    if openfold_runner_yaml is not None:
+        command.extend(["--runner-yaml", str(openfold_runner_yaml)])
+    if openfold_ckpt is not None:
+        command.extend(["--inference-ckpt-path", str(openfold_ckpt)])
+
+    completed = subprocess.run(command, cwd=output_root, capture_output=True, text=True, check=False)
+    log_path = output_root / "openfold3_batch" / "openfold_run.json"
+    _write_json(
+        log_path,
+        {
+            "command": command,
+            "returncode": completed.returncode,
+            "stdout": completed.stdout,
+            "stderr": completed.stderr,
+            "query_json_path": str(query_json_path),
+            "batch_output_dir": str(batch_output_dir),
+        },
+    )
+
+    rows: list[dict[str, Any]] = []
+    if completed.returncode != 0:
+        message = (
+            f"OpenFold3 batch predict failed with return code {completed.returncode}: "
+            f"{completed.stderr[-500:] or completed.stdout[-500:]}"
+        )
+        for case in cases:
+            case_dir = output_root / "cases" / case.case_id
+            backend_dir = case_dir / "openfold3"
+            backend_dir.mkdir(parents=True, exist_ok=True)
+            result = BackendResult("openfold3", "failed", backend_dir, (), message)
+            save_manifest(case_dir / "manifest.json", {"openfold3": manifest_entry_from_result(result, "batch")})
+            rows.append(
+                {
+                    "case_id": case.case_id,
+                    "openfold3_status": "failed",
+                    "foldx_status": "",
+                    "openfold3_path": "",
+                    "foldx_path": "",
+                }
+            )
+        return _write_openfold_shard_results(output_root, rows)
+
+    for case in tqdm(cases, desc="OpenFold batch outputs", unit="case", dynamic_ncols=True):
+        case_dir = output_root / "cases" / case.case_id
+        backend_dir = case_dir / "openfold3"
+        output_dir = backend_dir / "output"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            query_output_dir = batch_output_dir / case.case_id
+            candidates = [path for path in query_output_dir.rglob("*.cif") if path.is_file()]
+            source_cif = _select_output_cif(candidates, batch_output_dir, query_id=case.case_id)
+            model_cif_path = output_dir / "model.cif"
+            shutil.copy2(source_cif, model_cif_path)
+            result = BackendResult("openfold3", "ok", backend_dir, (model_cif_path,), "OpenFold3 batch predict completed")
+            status = "success"
+            structure_path = str(model_cif_path)
+        except Exception as exc:  # noqa: BLE001
+            result = BackendResult(
+                "openfold3",
+                "failed",
+                backend_dir,
+                (),
+                f"OpenFold3 batch output selection failed: {type(exc).__name__}: {exc}",
+            )
+            status = "failed"
+            structure_path = ""
+        save_manifest(case_dir / "manifest.json", {"openfold3": manifest_entry_from_result(result, "batch")})
+        rows.append(
+            {
+                "case_id": case.case_id,
+                "openfold3_status": status,
+                "foldx_status": "",
+                "openfold3_path": structure_path,
+                "foldx_path": "",
+            }
+        )
+
+    return _write_openfold_shard_results(output_root, rows)
+
+
 def build_adapters(methods: Iterable[str], *, foldx_runs: int, rosetta_runs: int, rosetta_top_k: int) -> list[DDGAdapter]:
     adapters: dict[str, DDGAdapter] = {
         "foldx": FoldXAdapter(number_of_runs=foldx_runs),
@@ -505,10 +654,9 @@ def write_server_plan(
         commands.append(
             " ".join(
                 [
-                    "python -m openfold3.experiment_pipeline.structure.cli",
-                    f"--dataset {structure_shard_dir / f'shard_{shard_index:04d}.csv'}",
-                    f"--output-dir {structure_output / f'shard_{shard_index:04d}'}",
-                    "--backend openfold3",
+                    "python -m openfold3.experiment_pipeline.ddg_pipeline.server_run run-openfold-shard",
+                    f"--structure-csv {structure_shard_dir / f'shard_{shard_index:04d}.csv'}",
+                    f"--output-root {structure_output / f'shard_{shard_index:04d}'}",
                     f"--openfold-python {openfold_python}",
                     *([] if openfold_runner_yaml is None else [f"--openfold-runner-yaml {openfold_runner_yaml}"]),
                     *([] if openfold_ckpt is None else [f"--openfold-inference-ckpt-path {openfold_ckpt}"]),
@@ -630,13 +778,12 @@ def write_batched_server_plan(
         openfold_command = [
             "python",
             "-m",
-            "openfold3.experiment_pipeline.structure.cli",
-            "--dataset",
+            "openfold3.experiment_pipeline.ddg_pipeline.server_run",
+            "run-openfold-shard",
+            "--structure-csv",
             batch_csv,
-            "--output-dir",
+            "--output-root",
             openfold_root,
-            "--backend",
-            "openfold3",
             "--openfold-python",
             openfold_python,
         ]
@@ -793,6 +940,13 @@ def build_parser() -> argparse.ArgumentParser:
     split.add_argument("--output-dir", type=Path, required=True)
     split.add_argument("--shard-count", type=int, required=True)
 
+    openfold_shard = subparsers.add_parser("run-openfold-shard")
+    openfold_shard.add_argument("--structure-csv", type=Path, required=True)
+    openfold_shard.add_argument("--output-root", type=Path, required=True)
+    openfold_shard.add_argument("--openfold-python", default="python")
+    openfold_shard.add_argument("--openfold-runner-yaml", type=Path, default=None)
+    openfold_shard.add_argument("--openfold-inference-ckpt-path", type=Path, default=None)
+
     merge_structure = subparsers.add_parser("merge-structure-results")
     merge_structure.add_argument("--output-csv", type=Path, required=True)
     merge_structure.add_argument("--input-roots", type=Path, nargs="+", required=True)
@@ -875,6 +1029,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "split-csv":
         paths = split_csv(args.input_csv, args.output_dir, args.shard_count)
         print(f"Wrote CSV shards: {len(paths)}")
+        return 0
+    if args.command == "run-openfold-shard":
+        results_path = run_openfold_shard(
+            args.structure_csv,
+            args.output_root.resolve(),
+            openfold_python=args.openfold_python,
+            openfold_runner_yaml=args.openfold_runner_yaml,
+            openfold_ckpt=args.openfold_inference_ckpt_path,
+        )
+        print(f"OpenFold shard results: {results_path}")
         return 0
     if args.command == "merge-structure-results":
         output_csv = merge_structure_results([root.resolve() for root in args.input_roots], args.output_csv.resolve())

@@ -38,6 +38,7 @@ from openfold3.experiment_pipeline.ddg_pipeline.server_run import (
     build_canonical_dataset,
     build_structure_dataset,
     merge_structure_results,
+    run_openfold_shard,
     run_ddg_shard,
     split_csv,
 )
@@ -982,3 +983,55 @@ def test_server_canonical_dataset_does_not_use_foldx_mutant_as_structure_source(
 def test_server_run_rejects_foldx_structure_source():
     with pytest.raises(ValueError, match="foldx outputs are mutant structures"):
         _parse_structure_sources("experimental,foldx")
+
+
+def test_server_run_openfold_shard_batches_queries_once(tmp_path, monkeypatch):
+    pdb_path = tmp_path / "input.pdb"
+    pdb_path.write_text("MODEL\nEND\n", encoding="utf-8")
+    structure_csv = tmp_path / "structure.csv"
+    structure_csv.write_text(
+        "protein_id,pdb_id,chain,position,wt_residue,mut_residue,experimental_ddg,mutation_id,pdb_residue_id,pdb_path,sequence\n"
+        f"p1,1ABC,A,1,L,A,0.1,L1A,1,{pdb_path},L\n"
+        f"p2,2ABC,A,1,M,V,0.2,M1V,1,{pdb_path},M\n",
+        encoding="utf-8",
+    )
+    calls: list[list[str]] = []
+
+    def fake_run(command, cwd, capture_output, text, check):
+        calls.append(command)
+        query_json = Path(command[command.index("--query-json") + 1])
+        payload = json.loads(query_json.read_text(encoding="utf-8"))
+        assert sorted(payload["queries"]) == ["p1__L1A", "p2__M1V"]
+        output_dir = Path(command[command.index("--output-dir") + 1])
+        rows = []
+        for case_id, best_sample in (("p1__L1A", 2), ("p2__M1V", 1)):
+            nested = output_dir / case_id / "seed_42"
+            nested.mkdir(parents=True, exist_ok=True)
+            for sample_index, score in ((1, 0.1), (2, 0.9)):
+                prefix = nested / f"{case_id}_seed_42_sample_{sample_index}"
+                Path(f"{prefix}_model.cif").write_text(f"{case_id}-sample-{sample_index}", encoding="utf-8")
+                confidence_path = Path(f"{prefix}_confidences_aggregated.json")
+                confidence_path.write_text(json.dumps({"sample_ranking_score": score}), encoding="utf-8")
+                if sample_index == best_sample:
+                    rows.append(
+                        json.dumps(
+                            {
+                                "query_id": case_id,
+                                "sample_index": sample_index,
+                                "sample_ranking_score": score,
+                                "aggregated_confidence_path": str(confidence_path),
+                            }
+                        )
+                    )
+        (output_dir / "summary.jsonl").write_text("\n".join(rows) + "\n", encoding="utf-8")
+        return subprocess.CompletedProcess(command, 0, stdout="ok", stderr="")
+
+    monkeypatch.setattr("openfold3.experiment_pipeline.ddg_pipeline.server_run.subprocess.run", fake_run)
+
+    results_path = run_openfold_shard(structure_csv, tmp_path / "openfold_shard", openfold_python="python-test")
+
+    assert len(calls) == 1
+    rows = list(csv.DictReader(results_path.open(encoding="utf-8")))
+    assert [row["openfold3_status"] for row in rows] == ["success", "success"]
+    for row in rows:
+        assert Path(row["openfold3_path"]).exists()
