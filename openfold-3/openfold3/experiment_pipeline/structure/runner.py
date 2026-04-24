@@ -7,6 +7,8 @@ from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Iterable, Mapping, Protocol
 
+from tqdm import tqdm
+
 from .cache import is_cached
 from .manifest import load_manifest, manifest_entry_from_result, save_manifest
 from .models import BackendResult, CaseManifest, MutationCase
@@ -90,7 +92,8 @@ class StructureRunner:
         sequences_by_case_id: Mapping[str, str],
     ) -> list[CaseManifest]:
         manifests: list[CaseManifest] = []
-        for case in cases:
+        case_list = list(cases)
+        for case in tqdm(case_list, desc="Structure cases", unit="case", dynamic_ncols=True):
             sequence = sequences_by_case_id[case.case_id]
             manifests.append(self.run_case(case, sequence))
         if not self.dry_run:

@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Iterable, Sequence
 
 import pandas as pd
+from tqdm import tqdm
 
 from openfold3.benchmark.structure_source import extract_protein_sequence
 
@@ -349,6 +350,7 @@ def run_ddg_shard(records: list[CanonicalMutationRecord], adapters: list[DDGAdap
     for adapter in selected_adapters:
         adapter.validate_environment()
 
+    jobs: list[tuple[CanonicalMutationRecord, DDGAdapter, str, Path, Path]] = []
     for record in shard_records:
         for adapter in selected_adapters:
             for structure_source in _structure_sources_for_adapter(adapter, config):
@@ -359,22 +361,32 @@ def run_ddg_shard(records: list[CanonicalMutationRecord], adapters: list[DDGAdap
                 if config.resume and row_path.exists():
                     continue
                 method_dir = layout["adapters"] / record.protein_id / record.mutation / structure_source / adapter.method_name
-                try:
-                    result = adapter.predict(record, structure_source, method_dir)
-                    row = _row_from_result(record, adapter, result)
-                    if result.status != "ok" and config.fail_fast:
-                        raise RuntimeError(result.error_message or result.status)
-                except Exception as exc:  # noqa: BLE001
-                    method_dir.mkdir(parents=True, exist_ok=True)
-                    (method_dir / "traceback.txt").write_text(traceback.format_exc(), encoding="utf-8")
-                    row = _failed_row(record, adapter, structure_source, method_dir, exc)
-                    if config.fail_fast:
-                        _write_json(row_path, row)
-                        raise
+                jobs.append((record, adapter, structure_source, method_dir, row_path))
+
+    progress = tqdm(jobs, desc="ddG predictions", unit="prediction", dynamic_ncols=True)
+    for record, adapter, structure_source, method_dir, row_path in progress:
+        progress.set_postfix(
+            case=record.protein_id,
+            mutation=record.mutation,
+            method=adapter.method_name,
+            source=structure_source,
+        )
+        try:
+            result = adapter.predict(record, structure_source, method_dir)
+            row = _row_from_result(record, adapter, result)
+            if result.status != "ok" and config.fail_fast:
+                raise RuntimeError(result.error_message or result.status)
+        except Exception as exc:  # noqa: BLE001
+            method_dir.mkdir(parents=True, exist_ok=True)
+            (method_dir / "traceback.txt").write_text(traceback.format_exc(), encoding="utf-8")
+            row = _failed_row(record, adapter, structure_source, method_dir, exc)
+            if config.fail_fast:
                 _write_json(row_path, row)
-                with log_path.open("a", encoding="utf-8") as handle:
-                    handle.write(json.dumps(row, sort_keys=True, default=str) + "\n")
-                _write_server_outputs(config.output_root, records, _collect_rows(rows_dir), config)
+                raise
+        _write_json(row_path, row)
+        with log_path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(row, sort_keys=True, default=str) + "\n")
+        _write_server_outputs(config.output_root, records, _collect_rows(rows_dir), config)
 
     _write_server_outputs(config.output_root, records, _collect_rows(rows_dir), config)
     return layout["outputs"] / "results.csv"
