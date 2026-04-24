@@ -178,6 +178,84 @@ def _read_foldx_total_energy(path: Path) -> float:
     return float(row["total energy"])
 
 
+def _read_foldx_rows(path: Path) -> list[dict[str, str]]:
+    lines = [line.strip() for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    header_index = next(index for index, line in enumerate(lines) if line.startswith("Pdb\t"))
+    headers = lines[header_index].split("\t")
+    rows: list[dict[str, str]] = []
+    for line in lines[header_index + 1 :]:
+        values = line.split("\t")
+        if len(values) != len(headers):
+            continue
+        rows.append(dict(zip(headers, values, strict=True)))
+    return rows
+
+
+def _extract_foldx_run_index(model_name: str) -> int:
+    stem = Path(model_name).stem
+    prefix = "WT_" if stem.startswith("WT_") else ""
+    core = stem[len(prefix) :]
+    run_index_text = core.rsplit("_", maxsplit=1)[-1]
+    if not run_index_text.isdigit():
+        raise ValueError(f"Could not extract FoldX run index from {model_name}")
+    return int(run_index_text)
+
+
+def _pair_foldx_generated_models(output_dir: Path, pdb_names: list[str]) -> tuple[list[str], list[str], list[dict[str, object]]]:
+    mutant_paths: dict[int, str] = {}
+    wt_paths: dict[int, str] = {}
+    for pdb_name in pdb_names:
+        run_index = _extract_foldx_run_index(pdb_name)
+        resolved_path = str((output_dir / pdb_name).resolve())
+        if pdb_name.startswith("WT_"):
+            if run_index in wt_paths:
+                raise ValueError(f"Duplicate WT FoldX model for run {run_index}: {pdb_name}")
+            wt_paths[run_index] = resolved_path
+        else:
+            if run_index in mutant_paths:
+                raise ValueError(f"Duplicate mutant FoldX model for run {run_index}: {pdb_name}")
+            mutant_paths[run_index] = resolved_path
+    if not mutant_paths:
+        raise ValueError("No mutant FoldX models were generated")
+    if not wt_paths:
+        raise ValueError("No WT FoldX models were generated")
+    run_indices = sorted(mutant_paths)
+    if sorted(wt_paths) != run_indices:
+        raise ValueError(
+            f"Mutant/WT FoldX run indices disagree: mutants={sorted(mutant_paths)} wt={sorted(wt_paths)}"
+        )
+    pairing = [
+        {
+            "run_index": run_index,
+            "mutant_model_path": mutant_paths[run_index],
+            "wt_model_path": wt_paths[run_index],
+        }
+        for run_index in run_indices
+    ]
+    return [mutant_paths[index] for index in run_indices], [wt_paths[index] for index in run_indices], pairing
+
+
+def _compute_foldx_per_run_ddg(raw_path: Path, model_pairing: list[dict[str, object]]) -> list[float]:
+    total_energy_by_name = {
+        str(row["Pdb"]): float(row["total energy"])
+        for row in _read_foldx_rows(raw_path)
+    }
+    per_run_ddg: list[float] = []
+    for pair in model_pairing:
+        mutant_name = Path(str(pair["mutant_model_path"])).name
+        wt_name = Path(str(pair["wt_model_path"])).name
+        mutant_energy = total_energy_by_name.get(mutant_name)
+        wt_energy = total_energy_by_name.get(wt_name)
+        if mutant_energy is None or wt_energy is None:
+            raise ValueError(
+                f"Missing FoldX raw energies for pairing mutant={mutant_name} wt={wt_name}"
+            )
+        per_run_ddg.append(mutant_energy - wt_energy)
+    if not per_run_ddg:
+        raise ValueError("No valid FoldX per-run ddG values were computed")
+    return per_run_ddg
+
+
 def _resolve_foldx_output_path(
     output_dir: Path,
     *,
@@ -470,20 +548,23 @@ class FoldXBuildModelMethod:
             for line in pdb_list_path.read_text(encoding="utf-8").splitlines()
             if line.strip()
         ] if pdb_list_path.exists() else []
-        mutant_model_name = pdb_names[0] if len(pdb_names) >= 1 else None
-        wt_model_name = pdb_names[1] if len(pdb_names) >= 2 else None
-        if mutant_model_name is None or wt_model_name is None:
+        try:
+            generated_mutant_models, generated_wt_models, model_pairing = _pair_foldx_generated_models(output_dir, pdb_names)
+        except ValueError as exc:
             return MethodResult(
                 method=self.name,
                 status="failed",
                 details={
-                    "reason": "foldx_generated_pdbs_missing",
+                    "reason": "foldx_generated_model_pairing_failed",
                     "resolved_executable": executable_path,
                     "work_dir": str(work_dir),
                     "pdb_list_path": str(pdb_list_path),
                     "generated_pdbs": pdb_names,
+                    "error": str(exc),
                 },
             )
+        per_run_ddg = _compute_foldx_per_run_ddg(raw_path, model_pairing)
+        mean_per_run_ddg = sum(per_run_ddg) / len(per_run_ddg)
 
         def _run_analyse_complex(pdb_name: str, suffix: str) -> tuple[dict[str, str], Path, Path, float]:
             command = [
@@ -534,10 +615,10 @@ class FoldXBuildModelMethod:
 
         try:
             mutant_summary, mutant_summary_path, mutant_interaction_path, mutant_runtime = _run_analyse_complex(
-                mutant_model_name, f"{output_prefix}_mut"
+                Path(generated_mutant_models[0]).name, f"{output_prefix}_mut"
             )
             wt_summary, wt_summary_path, wt_interaction_path, wt_runtime = _run_analyse_complex(
-                wt_model_name, f"{output_prefix}_wt"
+                Path(generated_wt_models[0]).name, f"{output_prefix}_wt"
             )
             protocol = "BuildModel+AnalyseComplex"
             mutant_interaction_energy = float(mutant_summary["Interaction Energy"])
@@ -555,7 +636,7 @@ class FoldXBuildModelMethod:
             wt_runtime = 0.0
             mutant_interaction_energy = None
             wt_interaction_energy = None
-            score = buildmodel_total_energy_change
+            score = mean_per_run_ddg
             analyse_complex_error = str(exc)
         else:
             analyse_complex_error = None
@@ -577,6 +658,8 @@ class FoldXBuildModelMethod:
             "analyse_wt_runtime_seconds": wt_runtime,
             "runtime_seconds": runtime_seconds,
             "buildmodel_total_energy_change": buildmodel_total_energy_change,
+            "buildmodel_mean_per_run_ddg": mean_per_run_ddg,
+            "per_run_buildmodel_ddg": per_run_ddg,
             "mutant_interaction_energy": mutant_interaction_energy,
             "wt_interaction_energy": wt_interaction_energy,
             "mutant_summary_path": str(mutant_summary_path),
@@ -588,8 +671,11 @@ class FoldXBuildModelMethod:
         if analyse_complex_error is not None:
             details["analyse_complex_error"] = analyse_complex_error
         details["generated_pdbs"] = pdb_names
-        details["mutant_model_path"] = str(output_dir / mutant_model_name)
-        details["wt_model_path"] = str(output_dir / wt_model_name)
+        details["generated_mutant_models"] = generated_mutant_models
+        details["generated_wt_models"] = generated_wt_models
+        details["model_pairing"] = model_pairing
+        details["mutant_model_path"] = generated_mutant_models[0]
+        details["wt_model_path"] = generated_wt_models[0]
         return MethodResult(
             method=self.name,
             status="ok",

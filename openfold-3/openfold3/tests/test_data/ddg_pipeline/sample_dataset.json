@@ -1,0 +1,72 @@
+[
+  {
+    "protein_id": "p1",
+    "sequence": "ALKKHHENEISHHAKEIERLQKEIERHKQSKKAKKAAQAA",
+    "mutation": "A1V",
+    "position": 1,
+    "wt": "A",
+    "mut": "V",
+    "structure_paths": {
+      "experimental": "/mnt/d/Proga/OpenFold_codex/OpenFold3_project/openfold-3/openfold3/tests/test_data/mmcifs/1hf9.cif",
+      "openfold": "/mnt/d/Proga/OpenFold_codex/OpenFold3_project/openfold-3/openfold3/tests/test_data/mmcifs/1hf9.cif",
+      "foldx": "/mnt/d/Proga/OpenFold_codex/OpenFold3_project/openfold-3/openfold3/tests/test_data/mmcifs/1hf9.cif"
+    },
+    "experimental_ddg": -1.0
+  },
+  {
+    "protein_id": "p2",
+    "sequence": "ALKKHHENEISHHAKEIERLQKEIERHKQSKKAKKAAQAA",
+    "mutation": "L2A",
+    "position": 2,
+    "wt": "L",
+    "mut": "A",
+    "structure_paths": {
+      "experimental": "/mnt/d/Proga/OpenFold_codex/OpenFold3_project/openfold-3/openfold3/tests/test_data/mmcifs/1hf9.cif",
+      "openfold": "/mnt/d/Proga/OpenFold_codex/OpenFold3_project/openfold-3/openfold3/tests/test_data/mmcifs/1hf9.cif",
+      "foldx": "/mnt/d/Proga/OpenFold_codex/OpenFold3_project/openfold-3/openfold3/tests/test_data/mmcifs/1hf9.cif"
+    },
+    "experimental_ddg": 0.2
+  },
+  {
+    "protein_id": "p3",
+    "sequence": "ALKKHHENEISHHAKEIERLQKEIERHKQSKKAKKAAQAA",
+    "mutation": "K3R",
+    "position": 3,
+    "wt": "K",
+    "mut": "R",
+    "structure_paths": {
+      "experimental": "/mnt/d/Proga/OpenFold_codex/OpenFold3_project/openfold-3/openfold3/tests/test_data/mmcifs/1hf9.cif",
+      "openfold": "/mnt/d/Proga/OpenFold_codex/OpenFold3_project/openfold-3/openfold3/tests/test_data/mmcifs/1hf9.cif",
+      "foldx": "/mnt/d/Proga/OpenFold_codex/OpenFold3_project/openfold-3/openfold3/tests/test_data/mmcifs/1hf9.cif"
+    },
+    "experimental_ddg": 1.5
+  },
+  {
+    "protein_id": "p4",
+    "sequence": "ALKKHHENEISHHAKEIERLQKEIERHKQSKKAKKAAQAA",
+    "mutation": "K4A",
+    "position": 4,
+    "wt": "K",
+    "mut": "A",
+    "structure_paths": {
+      "experimental": "/mnt/d/Proga/OpenFold_codex/OpenFold3_project/openfold-3/openfold3/tests/test_data/mmcifs/1hf9.cif",
+      "openfold": "/mnt/d/Proga/OpenFold_codex/OpenFold3_project/openfold-3/openfold3/tests/test_data/mmcifs/1hf9.cif",
+      "foldx": "/mnt/d/Proga/OpenFold_codex/OpenFold3_project/openfold-3/openfold3/tests/test_data/mmcifs/1hf9.cif"
+    },
+    "experimental_ddg": null
+  },
+  {
+    "protein_id": "p5",
+    "sequence": "ALKKHHENEISHHAKEIERLQKEIERHKQSKKAKKAAQAA",
+    "mutation": "H5A",
+    "position": 5,
+    "wt": "H",
+    "mut": "A",
+    "structure_paths": {
+      "experimental": "/mnt/d/Proga/OpenFold_codex/OpenFold3_project/openfold-3/openfold3/tests/test_data/mmcifs/1hf9.cif",
+      "openfold": "/mnt/d/Proga/OpenFold_codex/OpenFold3_project/openfold-3/openfold3/tests/test_data/mmcifs/1hf9.cif",
+      "foldx": "/mnt/d/Proga/OpenFold_codex/OpenFold3_project/openfold-3/openfold3/tests/test_data/mmcifs/1hf9.cif"
+    },
+    "experimental_ddg": -0.3
+  }
+]
