@@ -574,6 +574,63 @@ def test_openfold_backend_prefers_final_cif_over_intermediate(tmp_path, monkeypa
     assert "[OF3] Found 2 CIF candidates" in capsys.readouterr().out
 
 
+def test_openfold_backend_selects_highest_ranked_sample_from_summary(tmp_path, monkeypatch):
+    case = _openfold_test_case(tmp_path)
+
+    def fake_run(command, cwd, capture_output, text, check):
+        output_dir = Path(command[command.index("--output-dir") + 1])
+        nested = output_dir / "protein-1__L1A" / "seed_42"
+        nested.mkdir(parents=True, exist_ok=True)
+        rows = []
+        for sample_index, score in ((1, 0.1), (2, 0.9), (3, 0.4)):
+            prefix = nested / f"protein-1__L1A_seed_42_sample_{sample_index}"
+            Path(f"{prefix}_model.cif").write_text(f"sample-{sample_index}", encoding="utf-8")
+            confidence_path = Path(f"{prefix}_confidences_aggregated.json")
+            confidence_path.write_text(json.dumps({"sample_ranking_score": score}), encoding="utf-8")
+            rows.append(
+                json.dumps(
+                    {
+                        "sample_index": sample_index,
+                        "sample_ranking_score": score,
+                        "aggregated_confidence_path": str(confidence_path),
+                    }
+                )
+            )
+        (output_dir / "summary.jsonl").write_text("\n".join(rows) + "\n", encoding="utf-8")
+        return subprocess.CompletedProcess(command, 0, stdout="ok", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    backend = OpenFold3Backend(python_executable="python-test")
+    result = backend.run(case, tmp_path / "case-root", "cfg-of3", "A")
+
+    assert result.status == "ok"
+    assert result.artifact_paths[0].read_text(encoding="utf-8") == "sample-2"
+
+
+def test_openfold_backend_falls_back_to_sample_one_when_summary_missing(tmp_path, monkeypatch):
+    case = _openfold_test_case(tmp_path)
+
+    def fake_run(command, cwd, capture_output, text, check):
+        output_dir = Path(command[command.index("--output-dir") + 1])
+        nested = output_dir / "protein-1__L1A" / "seed_42"
+        nested.mkdir(parents=True, exist_ok=True)
+        for sample_index in range(1, 4):
+            (nested / f"protein-1__L1A_seed_42_sample_{sample_index}_model.cif").write_text(
+                f"sample-{sample_index}",
+                encoding="utf-8",
+            )
+        return subprocess.CompletedProcess(command, 0, stdout="ok", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    backend = OpenFold3Backend(python_executable="python-test")
+    result = backend.run(case, tmp_path / "case-root", "cfg-of3", "A")
+
+    assert result.status == "ok"
+    assert result.artifact_paths[0].read_text(encoding="utf-8") == "sample-1"
+
+
 def test_openfold_backend_raises_on_ambiguous_cif_outputs(tmp_path, monkeypatch, capsys):
     case = _openfold_test_case(tmp_path)
 

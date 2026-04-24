@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -10,21 +11,80 @@ from pathlib import Path
 from ..models import BackendResult, MutationCase
 
 
+def _model_path_from_confidence_path(path: Path) -> Path | None:
+    name = path.name
+    for suffix in ("_confidences_aggregated.json", "_confidences.json"):
+        if name.endswith(suffix):
+            return path.with_name(f"{name.removesuffix(suffix)}_model.cif")
+    return None
+
+
+def _select_ranked_cif(output_dir: Path) -> Path | None:
+    ranked_candidates: list[tuple[float, int, Path]] = []
+    for summary_path in sorted(output_dir.rglob("summary.jsonl")):
+        for line_number, line in enumerate(summary_path.read_text(encoding="utf-8").splitlines(), start=1):
+            if not line.strip():
+                continue
+            payload = json.loads(line)
+            score = payload.get("sample_ranking_score")
+            confidence_path = payload.get("aggregated_confidence_path")
+            if score is None or confidence_path is None:
+                continue
+            model_path = _model_path_from_confidence_path(Path(str(confidence_path)))
+            if model_path is None:
+                continue
+            if not model_path.is_absolute():
+                model_path = (summary_path.parent / model_path).resolve()
+            if model_path.exists():
+                ranked_candidates.append((float(score), -line_number, model_path))
+
+    if not ranked_candidates:
+        return None
+    ranked_candidates.sort(key=lambda item: (item[0], item[1], str(item[2])), reverse=True)
+    best = ranked_candidates[0]
+    tied = [candidate for candidate in ranked_candidates if candidate[:2] == best[:2]]
+    if len(tied) > 1:
+        names = ", ".join(sorted(str(candidate[2]) for candidate in tied))
+        raise RuntimeError(f"OpenFold3 summary ranking is ambiguous: {names}")
+    return best[2]
+
+
+def _select_first_sample_cif(cif_candidates: list[Path]) -> Path | None:
+    sample_pattern = re.compile(r"_sample_(\d+)_model\.cif$")
+    indexed: list[tuple[int, Path]] = []
+    for path in cif_candidates:
+        match = sample_pattern.search(path.name)
+        if match is not None:
+            indexed.append((int(match.group(1)), path))
+    if len(indexed) != len(cif_candidates):
+        return None
+    sample_one = [path for index, path in indexed if index == 1]
+    return sample_one[0] if len(sample_one) == 1 else None
+
+
 def _is_preferred_cif_name(path: Path) -> bool:
     name = path.name.lower()
     return "final" in name or ("model" in name and "intermediate" not in name)
 
 
-def _select_output_cif(cif_candidates: list[Path]) -> Path:
+def _select_output_cif(cif_candidates: list[Path], output_dir: Path) -> Path:
     print(f"[OF3] Found {len(cif_candidates)} CIF candidates")
     if not cif_candidates:
         raise RuntimeError("OpenFold3 completed but no CIF output was found")
     if len(cif_candidates) == 1:
         return cif_candidates[0]
 
+    ranked = _select_ranked_cif(output_dir)
+    if ranked is not None:
+        return ranked
+
     preferred = [path for path in cif_candidates if _is_preferred_cif_name(path)]
     if len(preferred) == 1:
         return preferred[0]
+
+    first_sample = _select_first_sample_cif(cif_candidates)
+    if first_sample is not None:
+        return first_sample
 
     candidate_names = ", ".join(sorted(str(path) for path in cif_candidates))
     raise RuntimeError(
@@ -116,7 +176,7 @@ class OpenFold3Backend:
             )
 
         cif_candidates = [path for path in output_dir.rglob("*.cif") if path.is_file()]
-        source_cif = _select_output_cif(cif_candidates)
+        source_cif = _select_output_cif(cif_candidates, output_dir)
 
         model_cif_path = output_dir / "model.cif"
         if source_cif.resolve() != model_cif_path.resolve():
