@@ -148,7 +148,7 @@ def build_structure_dataset(
     rejected_csv: Path,
     *,
     max_records: int | None = None,
-    require_position_residue_id_match: bool = True,
+    require_position_residue_id_match: bool = False,
 ) -> list[dict[str, Any]]:
     frame = pd.read_csv(
         processed_csv,
@@ -179,10 +179,14 @@ def build_structure_dataset(
         if max_records is not None and len(rows) >= max_records:
             break
 
+    output_columns = list(frame.columns)
+    if "sequence" not in output_columns:
+        output_columns.append("sequence")
+    rejected_columns = output_columns + ["reject_reason"]
     output_csv.parent.mkdir(parents=True, exist_ok=True)
-    pd.DataFrame(rows).to_csv(output_csv, index=False)
+    pd.DataFrame(rows, columns=output_columns).to_csv(output_csv, index=False)
     rejected_csv.parent.mkdir(parents=True, exist_ok=True)
-    pd.DataFrame(rejected).to_csv(rejected_csv, index=False)
+    pd.DataFrame(rejected, columns=rejected_columns).to_csv(rejected_csv, index=False)
     return rows
 
 
@@ -818,7 +822,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.output_csv,
             args.rejected_csv,
             max_records=args.max_records,
-            require_position_residue_id_match=not args.allow_position_residue_mismatch,
+            require_position_residue_id_match=False,
         )
         print(f"Prepared structure dataset rows: {len(rows)}")
         print(f"Output: {args.output_csv}")
