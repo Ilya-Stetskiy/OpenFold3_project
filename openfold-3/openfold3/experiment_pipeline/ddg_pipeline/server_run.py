@@ -10,6 +10,7 @@ import shlex
 import shutil
 import subprocess
 import traceback
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -73,6 +74,7 @@ class ServerRunConfig:
     seed: int = 17
     resume: bool = True
     fail_fast: bool = False
+    parallel_jobs: int = 1
 
 
 def _write_json(path: Path, payload: Any) -> None:
@@ -539,11 +541,48 @@ def _write_server_outputs(output_root: Path, records: list[CanonicalMutationReco
             "seed": config.seed,
             "resume": config.resume,
             "fail_fast": config.fail_fast,
+            "parallel_jobs": config.parallel_jobs,
             "timestamp_utc": datetime.now(timezone.utc).isoformat(),
             "python_version": platform.python_version(),
             "platform": platform.platform(),
         },
     )
+
+
+DDGJob = tuple[CanonicalMutationRecord, DDGAdapter, str, Path, Path]
+
+
+def _run_ddg_job(job: DDGJob) -> tuple[Path, dict[str, Any]]:
+    record, adapter, structure_source, method_dir, row_path = job
+    try:
+        result = adapter.predict(record, structure_source, method_dir)
+        row = _row_from_result(record, adapter, result)
+    except Exception as exc:  # noqa: BLE001
+        method_dir.mkdir(parents=True, exist_ok=True)
+        (method_dir / "traceback.txt").write_text(traceback.format_exc(), encoding="utf-8")
+        row = _failed_row(record, adapter, structure_source, method_dir, exc)
+    return row_path, row
+
+
+def _can_run_ddg_job_in_parallel(job: DDGJob) -> bool:
+    _record, adapter, _structure_source, _method_dir, _row_path = job
+    return not adapter.sequence_based
+
+
+def _persist_ddg_row(
+    row_path: Path,
+    row: dict[str, Any],
+    *,
+    log_path: Path,
+    output_root: Path,
+    records: list[CanonicalMutationRecord],
+    rows_dir: Path,
+    config: ServerRunConfig,
+) -> None:
+    _write_json(row_path, row)
+    with log_path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(row, sort_keys=True, default=str) + "\n")
+    _write_server_outputs(output_root, records, _collect_rows(rows_dir), config)
 
 
 def run_ddg_shard(records: list[CanonicalMutationRecord], adapters: list[DDGAdapter], config: ServerRunConfig) -> Path:
@@ -561,7 +600,7 @@ def run_ddg_shard(records: list[CanonicalMutationRecord], adapters: list[DDGAdap
     for adapter in selected_adapters:
         adapter.validate_environment()
 
-    jobs: list[tuple[CanonicalMutationRecord, DDGAdapter, str, Path, Path]] = []
+    jobs: list[DDGJob] = []
     for record in shard_records:
         for adapter in selected_adapters:
             for structure_source in _structure_sources_for_adapter(adapter, config):
@@ -574,30 +613,59 @@ def run_ddg_shard(records: list[CanonicalMutationRecord], adapters: list[DDGAdap
                 method_dir = layout["adapters"] / record.protein_id / record.mutation / structure_source / adapter.method_name
                 jobs.append((record, adapter, structure_source, method_dir, row_path))
 
-    progress = tqdm(jobs, desc="ddG predictions", unit="prediction", dynamic_ncols=True)
-    for record, adapter, structure_source, method_dir, row_path in progress:
+    parallel_jobs = max(1, config.parallel_jobs)
+    parallelizable_jobs = [job for job in jobs if _can_run_ddg_job_in_parallel(job)]
+    serial_jobs = [job for job in jobs if not _can_run_ddg_job_in_parallel(job)]
+    if parallel_jobs > 1 and parallelizable_jobs:
+        print(f"[DDG PARALLEL] running {len(parallelizable_jobs)} structure predictions with {parallel_jobs} workers")
+        with ThreadPoolExecutor(max_workers=parallel_jobs) as executor:
+            futures = {executor.submit(_run_ddg_job, job): job for job in parallelizable_jobs}
+            progress = tqdm(as_completed(futures), total=len(futures), desc="ddG structure predictions", unit="prediction", dynamic_ncols=True)
+            for future in progress:
+                job = futures[future]
+                record, adapter, structure_source, _method_dir, _row_path = job
+                progress.set_postfix(
+                    case=record.protein_id,
+                    mutation=record.mutation,
+                    method=adapter.method_name,
+                    source=structure_source,
+                )
+                row_path, row = future.result()
+                _persist_ddg_row(
+                    row_path,
+                    row,
+                    log_path=log_path,
+                    output_root=config.output_root,
+                    records=records,
+                    rows_dir=rows_dir,
+                    config=config,
+                )
+                if config.fail_fast and row["status"] != "ok":
+                    raise RuntimeError(row["error_message"] or row["status"])
+    else:
+        serial_jobs = parallelizable_jobs + serial_jobs
+
+    progress = tqdm(serial_jobs, desc="ddG predictions", unit="prediction", dynamic_ncols=True)
+    for job in progress:
+        record, adapter, structure_source, _method_dir, _row_path = job
         progress.set_postfix(
             case=record.protein_id,
             mutation=record.mutation,
             method=adapter.method_name,
             source=structure_source,
         )
-        try:
-            result = adapter.predict(record, structure_source, method_dir)
-            row = _row_from_result(record, adapter, result)
-            if result.status != "ok" and config.fail_fast:
-                raise RuntimeError(result.error_message or result.status)
-        except Exception as exc:  # noqa: BLE001
-            method_dir.mkdir(parents=True, exist_ok=True)
-            (method_dir / "traceback.txt").write_text(traceback.format_exc(), encoding="utf-8")
-            row = _failed_row(record, adapter, structure_source, method_dir, exc)
-            if config.fail_fast:
-                _write_json(row_path, row)
-                raise
-        _write_json(row_path, row)
-        with log_path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(row, sort_keys=True, default=str) + "\n")
-        _write_server_outputs(config.output_root, records, _collect_rows(rows_dir), config)
+        row_path, row = _run_ddg_job(job)
+        _persist_ddg_row(
+            row_path,
+            row,
+            log_path=log_path,
+            output_root=config.output_root,
+            records=records,
+            rows_dir=rows_dir,
+            config=config,
+        )
+        if config.fail_fast and row["status"] != "ok":
+            raise RuntimeError(row["error_message"] or row["status"])
 
     _write_server_outputs(config.output_root, records, _collect_rows(rows_dir), config)
     return layout["outputs"] / "results.csv"
@@ -633,6 +701,7 @@ def write_server_plan(
     foldx_runs: int,
     rosetta_runs: int,
     rosetta_top_k: int,
+    parallel_jobs: int,
     openfold_python: str,
     openfold_runner_yaml: Path | None,
     openfold_ckpt: Path | None,
@@ -691,6 +760,7 @@ def write_server_plan(
                     f"--foldx-runs {foldx_runs}",
                     f"--rosetta-runs {rosetta_runs}",
                     f"--rosetta-top-k {rosetta_top_k}",
+                    f"--parallel-jobs {parallel_jobs}",
                 ]
             )
         )
@@ -718,6 +788,7 @@ def write_batched_server_plan(
     foldx_runs: int,
     rosetta_runs: int,
     rosetta_top_k: int,
+    parallel_jobs: int,
     openfold_python: str,
     openfold_runner_yaml: Path | None,
     openfold_ckpt: Path | None,
@@ -873,6 +944,8 @@ def write_batched_server_plan(
                         rosetta_runs,
                         "--rosetta-top-k",
                         rosetta_top_k,
+                        "--parallel-jobs",
+                        parallel_jobs,
                     ]
                 ),
                 "",
@@ -961,6 +1034,7 @@ def build_parser() -> argparse.ArgumentParser:
     run_shard.add_argument("--foldx-runs", type=int, default=5)
     run_shard.add_argument("--rosetta-runs", type=int, default=20)
     run_shard.add_argument("--rosetta-top-k", type=int, default=3)
+    run_shard.add_argument("--parallel-jobs", type=int, default=1)
     run_shard.add_argument("--no-resume", action="store_true")
     run_shard.add_argument("--fail-fast", action="store_true")
 
@@ -976,6 +1050,7 @@ def build_parser() -> argparse.ArgumentParser:
     plan.add_argument("--foldx-runs", type=int, default=5)
     plan.add_argument("--rosetta-runs", type=int, default=20)
     plan.add_argument("--rosetta-top-k", type=int, default=3)
+    plan.add_argument("--parallel-jobs", type=int, default=1)
     plan.add_argument("--openfold-python", default="python")
     plan.add_argument("--openfold-runner-yaml", type=Path, default=None)
     plan.add_argument("--openfold-inference-ckpt-path", type=Path, default=None)
@@ -989,6 +1064,7 @@ def build_parser() -> argparse.ArgumentParser:
     batched_plan.add_argument("--foldx-runs", type=int, default=5)
     batched_plan.add_argument("--rosetta-runs", type=int, default=20)
     batched_plan.add_argument("--rosetta-top-k", type=int, default=3)
+    batched_plan.add_argument("--parallel-jobs", type=int, default=1)
     batched_plan.add_argument("--openfold-python", default="python")
     batched_plan.add_argument("--openfold-runner-yaml", type=Path, default=None)
     batched_plan.add_argument("--openfold-inference-ckpt-path", type=Path, default=None)
@@ -1064,6 +1140,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 shard_count=args.shard_count,
                 resume=not args.no_resume,
                 fail_fast=bool(args.fail_fast),
+                parallel_jobs=args.parallel_jobs,
             ),
         )
         print(f"Shard results: {results_path}")
@@ -1081,6 +1158,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             foldx_runs=args.foldx_runs,
             rosetta_runs=args.rosetta_runs,
             rosetta_top_k=args.rosetta_top_k,
+            parallel_jobs=args.parallel_jobs,
             openfold_python=args.openfold_python,
             openfold_runner_yaml=args.openfold_runner_yaml,
             openfold_ckpt=args.openfold_inference_ckpt_path,
@@ -1097,6 +1175,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             foldx_runs=args.foldx_runs,
             rosetta_runs=args.rosetta_runs,
             rosetta_top_k=args.rosetta_top_k,
+            parallel_jobs=args.parallel_jobs,
             openfold_python=args.openfold_python,
             openfold_runner_yaml=args.openfold_runner_yaml,
             openfold_ckpt=args.openfold_inference_ckpt_path,

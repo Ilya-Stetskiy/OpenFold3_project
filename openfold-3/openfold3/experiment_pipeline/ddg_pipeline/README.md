@@ -141,6 +141,7 @@ python -m openfold3.experiment_pipeline.ddg_pipeline.server_run write-server-pla
   --foldx-runs 5 \
   --rosetta-runs 20 \
   --rosetta-top-k 3 \
+  --parallel-jobs 4 \
   --openfold-python python
 ```
 
@@ -154,7 +155,7 @@ The generated `server_commands.sh` performs the full staged workflow:
 6. run ddG shards with incremental `results.csv` writes
 7. merge shard outputs into final results
 
-The ddG shard runner writes one row artifact per method/case under `outputs/rows/`, then rewrites `outputs/results.csv` after each completed method. This makes long jobs resumable and prevents losing completed FoldX, Rosetta, or ESM2 results if a later case fails.
+The ddG shard runner writes one row artifact per method/case under `outputs/rows/`, then rewrites `outputs/results.csv` after each completed method. This makes long jobs resumable and prevents losing completed FoldX, Rosetta, or ESM2 results if a later case fails. Structure-based ddG jobs can be parallelized with `--parallel-jobs`; sequence-based ESM2 jobs remain serial to avoid loading multiple large models at once.
 
 OpenFold server shards should use `server_run run-openfold-shard`, which builds one multi-query `query.json` per shard and initializes OpenFold once for the whole shard instead of once per mutation case.
 

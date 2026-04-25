@@ -146,6 +146,45 @@ class SequenceCountingAdapter(DDGAdapter):
         return raw_value
 
 
+@dataclass(frozen=True, slots=True)
+class StructureCountingAdapter(DDGAdapter):
+    method_name: str = "structure_test"
+    sequence_based: bool = False
+
+    def prepare_input(self, record, structure_source, work_dir):
+        path = work_dir / "input.json"
+        path.write_text(json.dumps({"structure_source": structure_source}, indent=2), encoding="utf-8")
+        return path
+
+    def run(self, prepared_input_path, record, structure_source, work_dir):
+        raw_output_path = work_dir / "raw_output.json"
+        raw_output_path.write_text(
+            json.dumps(
+                {
+                    "backend_status": "ok",
+                    "structure_source": structure_source,
+                    "ddg": 1.0,
+                    "ddg_std": 0.0,
+                    "n_runs_requested": 1,
+                    "n_runs_valid": 1,
+                    "per_run_ddg": [1.0],
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        return BackendRunResult(status="ok", raw_output_path=raw_output_path)
+
+    def parse_output(self, raw_output_path):
+        return 1.0
+
+    def extract_summary(self, raw_output_path):
+        return {"ddg_std": 0.0, "n_runs_requested": 1, "n_runs_valid": 1, "per_run_ddg": [1.0]}
+
+    def normalize(self, raw_value):
+        return raw_value
+
+
 def test_stage0_layout_and_tree(tmp_path, capsys):
     layout = ensure_layout(tmp_path / "ddg_pipeline_run")
     tree = layout_tree(tmp_path / "ddg_pipeline_run")
@@ -913,6 +952,28 @@ def test_server_run_incremental_resume_with_sequence_adapter(tmp_path):
     mtime = row_files[0].stat().st_mtime_ns
     run_ddg_shard([record], [SequenceCountingAdapter()], config)
     assert row_files[0].stat().st_mtime_ns == mtime
+
+
+def test_server_run_parallel_jobs_with_structure_adapter(tmp_path):
+    record = _single_record()
+    config = ServerRunConfig(
+        output_root=tmp_path / "server",
+        methods=("structure_test",),
+        structure_sources=("experimental", "openfold"),
+        shard_index=0,
+        shard_count=1,
+        resume=True,
+        parallel_jobs=2,
+    )
+
+    results_path = run_ddg_shard([record], [StructureCountingAdapter()], config)
+    rows = list(csv.DictReader(results_path.open(encoding="utf-8")))
+    assert len(rows) == 2
+    assert {row["structure_source"] for row in rows} == {"experimental", "openfold"}
+    assert {row["status"] for row in rows} == {"ok"}
+
+    run_config = json.loads((config.output_root / "config" / "server_run_config.json").read_text(encoding="utf-8"))
+    assert run_config["parallel_jobs"] == 2
 
 
 def test_server_run_merge_structure_results(tmp_path):
