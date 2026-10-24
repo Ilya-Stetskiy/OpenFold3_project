@@ -1,0 +1,3 @@
+benchmark,direction,protein_id,pdb_id,chain,position,pdb_residue_id,mutation_id,method,status,ddg,unit,experimental_ddg,report_path
+S669,direct,1a0fA_direct,1A0F,A,11,11,S11A,foldx,ok,0.0,kcal/mol,-1.8,/mnt/d/Proga/OpenFold_codex/OpenFold3_project/analysis/s669_local_run/reports/S669_1a0fA_direct_S11A.json
+S669,direct,1a0fA_direct,1A0F,A,11,11,S11A,rosetta_score,ok,-8.675,rosetta_energy,-1.8,/mnt/d/Proga/OpenFold_codex/OpenFold3_project/analysis/s669_local_run/reports/S669_1a0fA_direct_S11A.json

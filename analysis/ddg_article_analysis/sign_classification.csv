@@ -1,0 +1,6 @@
+method,structure_source,unit,n,sign_accuracy
+foldx,experimental,kcal/mol,641,0.750390015600624
+rosetta,openfold,REU,675,0.7244444444444444
+rosetta,experimental,REU,623,0.7158908507223114
+foldx,openfold,kcal/mol,676,0.7071005917159763
+esm2,sequence_only,log-probability,655,0.32061068702290074

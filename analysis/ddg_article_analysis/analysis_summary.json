@@ -1,0 +1,35 @@
+{
+  "results_csv": "D:\\Download\\results (1).csv",
+  "results_csv_sha256": "15e5e4e73ed7b7a07bafc87fd210af5c0ad843ea23ce50804077304d7a0cc032",
+  "analysis_time_utc": "2026-05-06T06:44:23.754350+00:00",
+  "python": "3.12.7",
+  "platform": "Windows-10-10.0.19045-SP0",
+  "output_dir": "D:\\Proga\\OpenFold_codex\\OpenFold3_project\\analysis\\ddg_article_analysis",
+  "rows": 3357,
+  "unique_cases": 655,
+  "ok_rows": 3270,
+  "failed_rows": 87,
+  "methods": [
+    "esm2",
+    "foldx",
+    "rosetta"
+  ],
+  "structure_sources": [
+    "experimental",
+    "openfold",
+    "sequence_only"
+  ],
+  "units_by_method": {
+    "esm2": [
+      "log-probability"
+    ],
+    "foldx": [
+      "",
+      "kcal/mol"
+    ],
+    "rosetta": [
+      "",
+      "REU"
+    ]
+  }
+}

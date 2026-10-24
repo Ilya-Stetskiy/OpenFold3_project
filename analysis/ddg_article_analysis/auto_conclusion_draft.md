@@ -1,0 +1,7 @@
+- Dataset contained 655 unique mutation cases and 3357 method/source rows.
+- Successful rows: 3270; failed rows: 87.
+- Best rank correlation was observed for foldx / experimental (Spearman=0.648, n=641).
+- FoldX on experimental structures is the primary kcal/mol baseline: Pearson=0.595, Spearman=0.648, MAE=1.233 kcal/mol, sign accuracy=0.750.
+- For foldx, experimental-vs-OpenFold paired agreement: Pearson=0.854, median |difference|=0.480, sign agreement=0.808.
+- For rosetta, experimental-vs-OpenFold paired agreement: Pearson=0.849, median |difference|=1.230, sign agreement=0.873.
+- ESM2 sign check: as-is Spearman=-0.216, inverted Spearman=0.216. If inverted is better, report ESM2 as a sequence score with opposite sign to ddG convention, not as kcal/mol.

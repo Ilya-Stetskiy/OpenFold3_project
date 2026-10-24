@@ -1,0 +1,113 @@
+{
+  "case_id": "S669_smoke_1a0fA_direct_S11A",
+  "structure_path": "/mnt/d/Proga/OpenFold_codex/OpenFold3_project/data/raw/s669/S669/pdbs/1a0f.pdb",
+  "confidence_path": null,
+  "structure_summary": {
+    "atom_count": 3444,
+    "residue_count": 578,
+    "chain_ids": [
+      "A",
+      "B"
+    ],
+    "chain_lengths": {
+      "A": 304,
+      "B": 274
+    },
+    "inferred_chain_groups": [
+      [
+        "A"
+      ],
+      [
+        "B"
+      ]
+    ],
+    "min_inter_chain_atom_distance": 2.4553223820916084,
+    "interface_atom_contacts_5a": 1139,
+    "interface_ca_contacts_8a": 62,
+    "chain_pair_min_distances": {
+      "A-B": 2.4553223820916084
+    }
+  },
+  "results": [
+    {
+      "method": "foldx",
+      "status": "ok",
+      "score": 0.0,
+      "units": "kcal/mol",
+      "details": {
+        "protocol": "BuildModel+AnalyseComplex",
+        "resolved_executable": "/mnt/d/Proga/OpenFold_codex/foldx5_Linux/foldx_20270131",
+        "work_dir": "/tmp/foldx-buildmodel-pw1uur0p",
+        "mutation_ids": [
+          "A_S11A"
+        ],
+        "dif_path": "/tmp/foldx-buildmodel-pw1uur0p/out/Dif_S669_smoke_1a0fA_direct_S11A_1a0f.fxout",
+        "average_path": "/tmp/foldx-buildmodel-pw1uur0p/out/Average_S669_smoke_1a0fA_direct_S11A_1a0f.fxout",
+        "raw_path": "/tmp/foldx-buildmodel-pw1uur0p/out/Raw_S669_smoke_1a0fA_direct_S11A_1a0f.fxout",
+        "pdb_list_path": "/tmp/foldx-buildmodel-pw1uur0p/out/PdbList_S669_smoke_1a0fA_direct_S11A_1a0f.fxout",
+        "prepared_input_pdb_path": "/tmp/foldx-buildmodel-pw1uur0p/1a0f.pdb",
+        "prepared_from_cif": false,
+        "pdb_prepare_runtime_seconds": 0.003566013998351991,
+        "buildmodel_runtime_seconds": 2.786150442996586,
+        "analyse_mutant_runtime_seconds": 1.4066741520000505,
+        "analyse_wt_runtime_seconds": 1.4556523460050812,
+        "runtime_seconds": 5.655693836997671,
+        "buildmodel_total_energy_change": -0.729084,
+        "buildmodel_mean_per_run_ddg": -0.7291000000000025,
+        "per_run_buildmodel_ddg": [
+          -0.7291000000000025
+        ],
+        "mutant_interaction_energy": -13.4394,
+        "wt_interaction_energy": -13.4394,
+        "mutant_summary_path": "/tmp/foldx-buildmodel-pw1uur0p/out/Summary_S669_smoke_1a0fA_direct_S11A_mut_AC.fxout",
+        "wt_summary_path": "/tmp/foldx-buildmodel-pw1uur0p/out/Summary_S669_smoke_1a0fA_direct_S11A_wt_AC.fxout",
+        "mutant_interaction_path": "/tmp/foldx-buildmodel-pw1uur0p/out/Interaction_S669_smoke_1a0fA_direct_S11A_mut_AC.fxout",
+        "wt_interaction_path": "/tmp/foldx-buildmodel-pw1uur0p/out/Interaction_S669_smoke_1a0fA_direct_S11A_wt_AC.fxout",
+        "stdout_tail": "   ********************************************\n   ***                                      ***\n   ***             FoldX 5.1 (c)            ***\n   ***                                      ***\n   ***     code by the FoldX Consortium     ***\n   ***                                      ***\n   ***     Jesper Borg, Frederic Rousseau   ***\n   ***    Joost Schymkowitz, Luis Serrano   ***\n   ***    Peter Vanhee, Erik Verschueren    ***\n   ***     Lies Baeten, Javier Delgado      ***\n   ***       and Francois Stricher          ***\n   *** and any other of the 9! permutations ***\n   ***   based on an original concept by    ***\n   ***   Raphael Guerois and Luis Serrano   ***\n   ********************************************\n\n\nBackHbond       =               -247.06\nSideHbond       =               -83.81\nEnergy_VdW      =               -493.92\nElectro         =               -25.38\nEnergy_SolvP    =               694.00\nEnergy_SolvH    =               -660.64\nEnergy_vdwclash =               41.12\nenergy_torsion  =               23.87\nbackbone_vdwclash=              333.35\nEntropy_sidec   =               248.73\nEntropy_mainc   =               599.50\nwater bonds     =               0.00\nhelix dipole    =               -1.31\nloop_entropy    =               0.00\ncis_bond        =               2.25\ndisulfide       =               0.00\nkn electrostatic=               0.31\npartial covalent interactions = 0.00\nEnergy_Ionisation =             0.83\nEntropy Complex =               0.00\n-----------------------------------------------------------\nTotal          = \t\t\t\t  98.48\n\nMutating residue = SERA11 into ALA\nvalidated file \"1a0f_1.pdb\" => successfully finished\nCleaning BuildModel...DONE\n",
+        "generated_pdbs": [
+          "1a0f_1.pdb",
+          "WT_1a0f_1.pdb"
+        ],
+        "generated_mutant_models": [
+          "/tmp/foldx-buildmodel-pw1uur0p/out/1a0f_1.pdb"
+        ],
+        "generated_wt_models": [
+          "/tmp/foldx-buildmodel-pw1uur0p/out/WT_1a0f_1.pdb"
+        ],
+        "model_pairing": [
+          {
+            "run_index": 1,
+            "mutant_model_path": "/tmp/foldx-buildmodel-pw1uur0p/out/1a0f_1.pdb",
+            "wt_model_path": "/tmp/foldx-buildmodel-pw1uur0p/out/WT_1a0f_1.pdb"
+          }
+        ],
+        "mutant_model_path": "/tmp/foldx-buildmodel-pw1uur0p/out/1a0f_1.pdb",
+        "wt_model_path": "/tmp/foldx-buildmodel-pw1uur0p/out/WT_1a0f_1.pdb"
+      }
+    },
+    {
+      "method": "rosetta_score",
+      "status": "ok",
+      "score": -8.675,
+      "units": "rosetta_energy",
+      "details": {
+        "protocol": "score_jd2",
+        "resolved_executable": "/mnt/d/Proga/OpenFold_codex/OpenFold3_project/tools/rosetta2021_full/rosetta_bin_linux_2021.16.61629_bundle/main/source/build/src/release/linux/3.10/64/x86/gcc/4.8/static/score_jd2.static.linuxgccrelease",
+        "database_path": "/mnt/d/Proga/OpenFold_codex/OpenFold3_project/tools/rosetta2021_full/rosetta_bin_linux_2021.16.61629_bundle/main/database",
+        "database_inferred_from_binary": false,
+        "work_dir": "/tmp/rosetta-score-yfq3x8aq",
+        "prepared_input_pdb_path": "/tmp/rosetta-score-yfq3x8aq/1a0f.pdb",
+        "prepared_from_cif": false,
+        "pdb_prepare_runtime_seconds": 0.0035864159945049323,
+        "runtime_seconds": 17.599779260002833,
+        "scorefile_path": "/tmp/rosetta-score-yfq3x8aq/out/score.sc",
+        "mutation_ids": [
+          "A_S11A"
+        ],
+        "stdout_tail": ": Database file opened: scoring/score_functions/P_AA_pp/shapovalov/10deg/kappa131/a20.prop\nprotocols.evaluation.ChiWellRmsdEvaluatorCreator: Evaluation Creator active ... \nprotocols.jd2.PDBJobInputter: Instantiate PDBJobInputter\nprotocols.jd2.PDBJobInputter: PDBJobInputter::fill_jobs\nprotocols.jd2.PDBJobInputter: pushed /tmp/rosetta-score-yfq3x8aq/1a0f.pdb nstruct index 1\nprotocols.evaluation.ChiWellRmsdEvaluatorCreator: Evaluation Creator active ... \nprotocols.jd2.PDBJobInputter: PDBJobInputter::pose_from_job\nprotocols.jd2.PDBJobInputter: filling pose from PDB /tmp/rosetta-score-yfq3x8aq/1a0f.pdb\ncore.import_pose.import_pose: File '/tmp/rosetta-score-yfq3x8aq/1a0f.pdb' automatically determined to be of type PDB\ncore.chemical.GlobalResidueTypeSet: Loading (but possibly not actually using) 'GTS' from the PDB components dictionary for residue type 'pdb_GTS'\nbasic.io.database: Database file opened: scoring/score_functions/elec_cp_reps.dat\ncore.scoring.elec.util: Read 40 countpair representative atoms\ncore.pack.dunbrack.RotamerLibrary: shapovalov_lib_fixes_enable option is true.\ncore.pack.dunbrack.RotamerLibrary: shapovalov_lib::shap_dun10_smooth_level of 1( aka lowest_smooth ) got activated.\ncore.pack.dunbrack.RotamerLibrary: Binary rotamer library selected: /mnt/d/Proga/OpenFold_codex/OpenFold3_project/tools/rosetta2021_full/rosetta_bin_linux_2021.16.61629_bundle/main/database/rotamer/shapovalov/StpDwn_0-0-0/Dunbrack10.lib.bin\ncore.pack.dunbrack.RotamerLibrary: Using Dunbrack library binary file '/mnt/d/Proga/OpenFold_codex/OpenFold3_project/tools/rosetta2021_full/rosetta_bin_linux_2021.16.61629_bundle/main/database/rotamer/shapovalov/StpDwn_0-0-0/Dunbrack10.lib.bin'.\ncore.pack.dunbrack.RotamerLibrary: Dunbrack 2010 library took 0.13 seconds to load from binary\nprotocols.jd2.JobDistributor: 1a0f_0001 reported success in 3 seconds\nprotocols.jd2.JobDistributor: no more batches to process... \nprotocols.jd2.JobDistributor: 1 jobs considered, 1 jobs attempted in 3 seconds\n"
+      }
+    }
+  ],
+  "experimental_ddg": -1.8,
+  "notes": null
+}

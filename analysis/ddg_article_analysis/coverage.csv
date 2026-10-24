@@ -1,0 +1,8 @@
+method,representation,structure_source,status,rows
+esm2,sequence,sequence_only,ok,655
+foldx,structure,experimental,failed,35
+foldx,structure,experimental,ok,641
+foldx,structure,openfold,ok,676
+rosetta,structure,experimental,failed,52
+rosetta,structure,experimental,ok,623
+rosetta,structure,openfold,ok,675

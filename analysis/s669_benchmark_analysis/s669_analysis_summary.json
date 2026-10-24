@@ -1,0 +1,32 @@
+{
+  "analysis_time_utc": "2026-05-14T10:03:03.450127+00:00",
+  "methods": [
+    "ACDC-NN",
+    "ACDC-NN-Seq",
+    "DDGun",
+    "DDGun3D",
+    "DUET",
+    "Dynamut",
+    "FoldX",
+    "I-Mutant3.0",
+    "I-Mutant3.0-Seq",
+    "INPS-Seq",
+    "INPS3D",
+    "MAESTRO",
+    "MuPro",
+    "PopMusic",
+    "PremPS",
+    "SAAFEC-Seq",
+    "SDM",
+    "ThermoNet",
+    "mCSM"
+  ],
+  "outputs": {
+    "coverage": "D:\\Proga\\OpenFold_codex\\OpenFold3_project\\analysis\\s669_benchmark_analysis\\s669_published_prediction_coverage.csv",
+    "metrics": "D:\\Proga\\OpenFold_codex\\OpenFold3_project\\analysis\\s669_benchmark_analysis\\s669_published_prediction_metrics.csv",
+    "predictions": "D:\\Proga\\OpenFold_codex\\OpenFold3_project\\analysis\\s669_benchmark_analysis\\s669_published_predictions_long.csv"
+  },
+  "prediction_rows": 23528,
+  "processed_s669_rows": 1244,
+  "raw_s669_csv": "D:\\Proga\\OpenFold_codex\\OpenFold3_project\\data\\raw\\s669\\S669\\S669.csv"
+}

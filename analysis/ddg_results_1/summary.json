@@ -1,0 +1,43 @@
+{
+  "esm2_sign_check": {
+    "as_is": {
+      "mae": 8.061104646385346,
+      "mean_experimental": 0.8827413254684248,
+      "mean_prediction": -6.663652832111062,
+      "n": 655,
+      "pearson": -0.23852478019289128,
+      "rmse": 9.423921409738659,
+      "sign_accuracy": 0.32061068702290074,
+      "spearman": -0.21649969803571942
+    },
+    "inverted": {
+      "mae": 6.25750754846277,
+      "mean_experimental": 0.8827413254684248,
+      "mean_prediction": 6.663652832111062,
+      "n": 655,
+      "pearson": 0.23852478019289128,
+      "rmse": 7.529666669863118,
+      "sign_accuracy": 0.6793893129770993,
+      "spearman": 0.21649969803571942
+    }
+  },
+  "failed_rows": 87,
+  "input_csv": "/mnt/d/Download/results (1).csv",
+  "method_counts": {
+    "esm2": 655,
+    "foldx": 1352,
+    "rosetta": 1350
+  },
+  "ok_rows": 3270,
+  "rows": 3357,
+  "status_counts": {
+    "failed": 87,
+    "ok": 3270
+  },
+  "structure_source_counts": {
+    "experimental": 1351,
+    "openfold": 1351,
+    "sequence_only": 655
+  },
+  "unique_cases": 655
+}
