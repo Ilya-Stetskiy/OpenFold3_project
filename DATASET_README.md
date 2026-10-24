@@ -158,27 +158,106 @@ pdb_residue_id
 pdb_path
 ```
 
+### Импортировать внешний benchmark S669
+
+S669 используется как независимая проверка обобщаемости, а не как замена
+FireProt-like датасета. Импортёр хранится отдельно, чтобы не смешивать основной
+набор эксперимента и внешний benchmark.
+
+```python
+from pipeline.external_benchmarks import S669Config, preprocess_s669, load_s669
+
+config = S669Config(force_preprocess=True)
+processed_path = preprocess_s669(config)
+df = load_s669(config)
+print(processed_path)
+print(df.groupby("direction").size())
+```
+
+По умолчанию импортируются direct и inverse variants. Для S669 direct WT PDB
+использует PDB numbering из `PDB_Mut`, а inverse PDB из архива часто использует
+sequence numbering из `Seq_Mut`; importer сохраняет фактический
+`pdb_residue_id` относительно структуры, которая будет передана downstream ddG
+инструменту. Строки, где residue identity в структуре не совпадает с WT для
+данного направления, сохраняются в `s669_discarded_rows.csv`.
+
+### Сравнить опубликованные S669 predictions
+
+Исходный S669 CSV содержит predictions ряда опубликованных методов. Быстрый
+анализ приводит их к long-table и считает Pearson, Spearman, RMSE, MAE, bias и
+sign accuracy против `Experimental_DDG`.
+
+```python
+from pipeline.s669_analysis import analyze_s669_published_predictions
+
+outputs = analyze_s669_published_predictions()
+print(outputs["metrics"])
+```
+
+Результаты сохраняются в:
+
+```text
+analysis/s669_benchmark_analysis/s669_published_predictions_long.csv
+analysis/s669_benchmark_analysis/s669_published_prediction_metrics.csv
+analysis/s669_benchmark_analysis/s669_published_prediction_coverage.csv
+analysis/s669_benchmark_analysis/s669_analysis_summary.json
+```
+
+### Запустить локальный S669 smoke/FoldX run
+
+Для локальной машины подготовлен отдельный notebook:
+
+```text
+notebooks/s669_local_ddg_run.ipynb
+```
+
+Он проверяет доступность локальных методов, экспортирует env vars для FoldX и
+Rosetta, запускает небольшой S669 sample и сохраняет результаты в:
+
+```text
+analysis/s669_local_run/s669_local_results_long.csv
+analysis/s669_local_run/s669_local_metrics.csv
+```
+
+На текущей машине готовым ddG-методом является `FoldX`. `rosetta_score_jd2`
+запускается, но в текущем harness это structural score proxy, а не полноценный
+mutation ddG protocol.
+
 ## Структура проекта
 
 Файлы, относящиеся к dataset stage:
 
 ```text
 pipeline/dataset.py
+pipeline/external_benchmarks.py
+pipeline/s669_analysis.py
+pipeline/s669_local_run.py
 notebooks/main_experiment.ipynb
+notebooks/s669_local_ddg_run.ipynb
 data/raw/
 data/processed/dataset_v1.csv
 data/processed/discarded_rows.csv
 data/processed/dataset_v1_meta.json
+data/processed/s669_dataset_v1.csv
+data/processed/s669_discarded_rows.csv
+data/processed/s669_dataset_v1_meta.json
 ```
 
 Ответственность файлов:
 
 - `pipeline/dataset.py` содержит configuration, download, preprocessing, validation, cache checks, sorting, metadata writing и loading.
-- `notebooks/main_experiment.ipynb` сейчас содержит только CONFIG и DATASET cells.
+- `pipeline/external_benchmarks.py` содержит отдельные importer-ы для внешних ddG benchmark datasets; сейчас поддержан S669.
+- `pipeline/s669_analysis.py` считает метрики опубликованных S669 predictions против experimental ddG.
+- `pipeline/s669_local_run.py` содержит helper-ы для локального FoldX/Rosetta smoke-run по S669.
+- `notebooks/main_experiment.ipynb` содержит общий вход в FireProt-like dataset, S669 import и S669 published-prediction analysis.
+- `notebooks/s669_local_ddg_run.ipynb` содержит локальный S669 preflight и sample/full-run переключатель.
 - `data/raw/` хранит скачанный FireProt-like archive и extracted raw files.
 - `data/processed/dataset_v1.csv` - строгий processed dataset.
 - `data/processed/discarded_rows.csv` - audit trail для удаленных строк.
 - `data/processed/dataset_v1_meta.json` - metadata для воспроизводимости.
+- `data/processed/s669_dataset_v1.csv` - канонический S669 benchmark в direct/inverse формате.
+- `data/processed/s669_discarded_rows.csv` - audit trail для отброшенных S669 rows.
+- `data/processed/s669_dataset_v1_meta.json` - metadata S669 importer-а.
 
 ## Технические детали
 
@@ -276,6 +355,7 @@ sequence_structure_mismatch: 0
 - Он не запускает OpenFold, FoldX, Rosetta, Prompt-DDG или GPU worker.
 - Он не выравнивает произвольные external protein sequences на structures; он использует source-provided `pdb_position` index и строго валидирует его.
 - Строки с отсутствующим или inconsistent structure mapping удаляются, а не исправляются автоматически.
+- S669 importer проверяет соответствие WT residue в предоставленной структуре и отбрасывает direct/inverse строки с mismatch, поэтому число импортированных inverse variants может быть меньше теоретических `669`.
 - Metadata содержит preprocessing timestamp, поэтому metadata file меняется между forced reruns даже при идентичном CSV content.
 
 ## Будущая работа
@@ -285,6 +365,7 @@ sequence_structure_mismatch: 0
 - Добавить небольшой fixture dataset для быстрой CI validation.
 - Добавить optional sequence-to-structure alignment для источников без `pdb_position`.
 - Задокументировать, как downstream OpenFold и FoldX stages должны по-разному использовать `position` и `pdb_residue_id`.
+- Добавить S461 как второй curated external benchmark, когда будет закреплен стабильный source file и его schema.
 
 
 ---
@@ -449,27 +530,106 @@ pdb_residue_id
 pdb_path
 ```
 
+### Import the external S669 benchmark
+
+S669 is used as an independent generalization check, not as a replacement for
+the FireProt-like dataset. Its importer lives separately so the main experiment
+dataset and external benchmark remain distinct.
+
+```python
+from pipeline.external_benchmarks import S669Config, preprocess_s669, load_s669
+
+config = S669Config(force_preprocess=True)
+processed_path = preprocess_s669(config)
+df = load_s669(config)
+print(processed_path)
+print(df.groupby("direction").size())
+```
+
+By default, both direct and inverse variants are imported. For S669, direct WT
+PDB files use PDB numbering from `PDB_Mut`, while inverse PDB files from the
+archive often use sequence numbering from `Seq_Mut`; the importer stores the
+actual `pdb_residue_id` for the structure that downstream ddG tools will
+receive. Rows where the structure residue identity does not match the WT residue
+for that direction are preserved in `s669_discarded_rows.csv`.
+
+### Compare bundled S669 predictions
+
+The source S669 CSV contains predictions from several published methods. The
+fast analysis converts them into a long table and computes Pearson, Spearman,
+RMSE, MAE, bias, and sign accuracy against `Experimental_DDG`.
+
+```python
+from pipeline.s669_analysis import analyze_s669_published_predictions
+
+outputs = analyze_s669_published_predictions()
+print(outputs["metrics"])
+```
+
+Outputs are written to:
+
+```text
+analysis/s669_benchmark_analysis/s669_published_predictions_long.csv
+analysis/s669_benchmark_analysis/s669_published_prediction_metrics.csv
+analysis/s669_benchmark_analysis/s669_published_prediction_coverage.csv
+analysis/s669_benchmark_analysis/s669_analysis_summary.json
+```
+
+### Run a local S669 smoke/FoldX run
+
+A separate local-machine notebook is available:
+
+```text
+notebooks/s669_local_ddg_run.ipynb
+```
+
+It checks local method availability, exports FoldX and Rosetta env vars, runs a
+small S669 sample, and writes results to:
+
+```text
+analysis/s669_local_run/s669_local_results_long.csv
+analysis/s669_local_run/s669_local_metrics.csv
+```
+
+On the current machine, the ready mutation ddG method is `FoldX`.
+`rosetta_score_jd2` runs, but in the current harness it is a structural score
+proxy, not a full mutation ddG protocol.
+
 ## Project Structure
 
 Dataset-specific files:
 
 ```text
 pipeline/dataset.py
+pipeline/external_benchmarks.py
+pipeline/s669_analysis.py
+pipeline/s669_local_run.py
 notebooks/main_experiment.ipynb
+notebooks/s669_local_ddg_run.ipynb
 data/raw/
 data/processed/dataset_v1.csv
 data/processed/discarded_rows.csv
 data/processed/dataset_v1_meta.json
+data/processed/s669_dataset_v1.csv
+data/processed/s669_discarded_rows.csv
+data/processed/s669_dataset_v1_meta.json
 ```
 
 Responsibilities:
 
 - `pipeline/dataset.py` contains dataset configuration, download, preprocessing, validation, cache checks, sorting, metadata writing, and loading.
-- `notebooks/main_experiment.ipynb` currently contains only CONFIG and DATASET cells.
+- `pipeline/external_benchmarks.py` contains separate importers for external ddG benchmark datasets; S669 is currently supported.
+- `pipeline/s669_analysis.py` computes metrics for bundled S669 predictions against experimental ddG.
+- `pipeline/s669_local_run.py` contains helpers for local FoldX/Rosetta smoke-runs on S669.
+- `notebooks/main_experiment.ipynb` contains the shared entry point for the FireProt-like dataset, S669 import, and S669 published-prediction analysis.
+- `notebooks/s669_local_ddg_run.ipynb` contains the local S669 preflight and sample/full-run switch.
 - `data/raw/` stores the downloaded FireProt-like archive and extracted raw files.
 - `data/processed/dataset_v1.csv` is the strict processed dataset.
 - `data/processed/discarded_rows.csv` is the audit trail for removed rows.
 - `data/processed/dataset_v1_meta.json` records reproducibility metadata.
+- `data/processed/s669_dataset_v1.csv` is the canonical S669 benchmark in direct/inverse format.
+- `data/processed/s669_discarded_rows.csv` is the audit trail for removed S669 rows.
+- `data/processed/s669_dataset_v1_meta.json` records S669 importer metadata.
 
 ## Technical Details
 
@@ -567,6 +727,7 @@ If any check fails, preprocessing is recomputed.
 - It does not run OpenFold, FoldX, Rosetta, Prompt-DDG, or any GPU worker.
 - It does not align arbitrary external protein sequences to structures; it relies on the source-provided `pdb_position` index and validates it strictly.
 - Rows with missing or inconsistent structure mapping are discarded rather than repaired.
+- The S669 importer validates WT residue identity in the provided structure and discards direct/inverse rows with mismatches, so the number of imported inverse variants can be lower than the theoretical `669`.
 - Metadata includes a preprocessing timestamp, so the metadata file changes between forced reruns even when the CSV content is identical.
 
 ## Future Work
@@ -576,4 +737,4 @@ If any check fails, preprocessing is recomputed.
 - Add a small fixture dataset for fast CI validation.
 - Add optional sequence-to-structure alignment for sources that do not provide `pdb_position`.
 - Document how downstream OpenFold and FoldX stages should consume `position` and `pdb_residue_id` differently.
-
+- Add S461 as a second curated external benchmark once a stable source file and schema are pinned.

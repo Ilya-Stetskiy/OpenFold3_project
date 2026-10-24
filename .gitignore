@@ -13,10 +13,20 @@
 __pycache__/
 *.py[cod]
 *.egg-info/
+*.part
+configs/server_paths.yaml
+configs/tools/foldx.yaml
+configs/tools/rosetta.yaml
+configs/tools/esm2.yaml
+configs/tools/openfold.yaml
+bundles/
+logs/run_profiles/
+data/run_state/
 results/
 runtime_smoke/
 msa_cache/
 local_data/
+data/raw/s669/
 cif_result/
 molecules/
 /tools/
@@ -33,3 +43,14 @@ third_party/**/__pycache__/
 *.pth
 *.bin
 *.safetensors
+
+# Local copy of server results (April 2026), too large for git
+server_snapshot_2026-04/
+
+# Regenerable data and generated outputs (rebuilt by scripts/)
+data/structures/
+data/processed/
+data/interim/
+reports/
+logs/**/*.log
+*.bak
