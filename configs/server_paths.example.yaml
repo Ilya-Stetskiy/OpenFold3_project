@@ -1,0 +1,21 @@
+server:
+  project_root: /home/jovyan/OpenFold3_project
+  data_root: /home/jovyan/OpenFold3_project/data
+  results_root: /home/jovyan/OpenFold3_project/results
+  logs_root: /home/jovyan/OpenFold3_project/logs
+
+tools:
+  foldx_binary: /path/to/foldx
+  rosetta_bin_dir: /path/to/rosetta/bin
+  openfold_env: openfold310
+  python_bin: python3
+
+gpu:
+  cuda_visible_devices: "0"
+  max_parallel_openfold_jobs: 1
+
+runtime:
+  default_workers_cpu: 8
+  default_workers_gpu: 1
+  use_tmux: true
+  tmux_session_prefix: openfold3_run

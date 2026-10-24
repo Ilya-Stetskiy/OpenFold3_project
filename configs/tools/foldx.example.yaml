@@ -1,0 +1,18 @@
+foldx:
+  binary_path: /path/to/foldx
+  working_mode: isolated_job_dir
+  default_command:
+    repair_pdb: RepairPDB
+    build_model: BuildModel
+  number_of_runs: 3
+  temperature: 298
+  ph: 7.0
+  timeout_seconds: 600
+  keep_raw_outputs: true
+  overwrite_existing: false
+
+paths:
+  structure_root: data/structures/chain/current_internal
+  results_root: results/current_internal/foldx
+  logs_root: logs/foldx_runs
+

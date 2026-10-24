@@ -1,0 +1,81 @@
+schema_name: ddg_mutations_v1
+schema_version: 1
+description: Canonical mutation-level input schema for DDG datasets.
+
+format:
+  preferred: csv
+  allowed:
+    - csv
+    - tsv
+    - parquet
+
+primary_key:
+  - dataset_id
+  - mutation_id
+
+required_fields:
+  dataset_id:
+    type: string
+    description: Dataset identifier from configs/datasets.yaml.
+  mutation_id:
+    type: string
+    description: Stable mutation row identifier within the dataset.
+  protein_id:
+    type: string
+    description: Protein, target, or entry identifier.
+  mutation:
+    type: string
+    description: Mutation label in a stable notation, for example A123V.
+  wild_type:
+    type: string
+    description: One-letter wild-type amino acid.
+  mutant:
+    type: string
+    description: One-letter mutant amino acid.
+  position:
+    type: integer
+    description: Mutation position in the referenced sequence or structure.
+  experimental_ddg:
+    type: number
+    units: kcal/mol
+    description: Experimental DDG value.
+
+recommended_fields:
+  pdb_id:
+    type: string
+    description: PDB identifier when structure-level mapping is available.
+  chain_id:
+    type: string
+    description: Chain identifier used for mutation mapping.
+  sequence:
+    type: string
+    description: Wild-type protein sequence used by sequence-based methods.
+  temperature:
+    type: number
+    units: K
+    description: Experimental temperature when available.
+  ph:
+    type: number
+    description: Experimental pH when available.
+  experimental_ddg_sign_convention:
+    type: string
+    description: Explicit DDG sign convention used by the source.
+  source_database:
+    type: string
+    description: Original database or publication source.
+  source_reference:
+    type: string
+    description: DOI, PubMed ID, citation, or source row reference.
+  split:
+    type: string
+    allowed:
+      - train
+      - validation
+      - test
+      - benchmark
+      - unassigned
+    description: Optional split label, if the dataset defines one.
+
+notes:
+  - Required fields define the minimum canonical processed mutation table.
+  - Raw files may use source-specific fields, but processed data should map to this schema.

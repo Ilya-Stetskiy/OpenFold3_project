@@ -1,0 +1,75 @@
+schema_name: ddg_results_v1
+schema_version: 1
+description: Canonical method-result schema for DDG prediction outputs.
+
+format:
+  preferred: csv
+  allowed:
+    - csv
+    - tsv
+    - parquet
+    - jsonl
+
+primary_key:
+  - dataset_id
+  - mutation_id
+  - method
+  - run_id
+
+required_fields:
+  dataset_id:
+    type: string
+    description: Dataset identifier from configs/datasets.yaml.
+  mutation_id:
+    type: string
+    description: Mutation identifier matching ddg_mutations_v1.
+  method:
+    type: string
+    description: Prediction method name, for example FoldX, Rosetta, ESM2, or OpenFold.
+  run_id:
+    type: string
+    description: Stable identifier for the method run or imported result batch.
+  predicted_ddg:
+    type: number
+    units: kcal/mol
+    description: Predicted DDG value after applying the documented sign convention.
+  status:
+    type: string
+    allowed:
+      - ok
+      - failed
+      - skipped
+      - missing
+    description: Result status for this mutation and method.
+
+recommended_fields:
+  experimental_ddg:
+    type: number
+    units: kcal/mol
+    description: Experimental DDG copied or joined for analysis convenience.
+  error_message:
+    type: string
+    description: Failure reason when status is not ok.
+  structure_source:
+    type: string
+    description: Source of the structure used by the method.
+  model_version:
+    type: string
+    description: Tool, model, or checkpoint version.
+  config_name:
+    type: string
+    description: Method configuration profile.
+  command:
+    type: string
+    description: Reproducibility command or compact run description.
+  created_at:
+    type: string
+    format: date-time
+    description: Timestamp for the result record or import.
+  notes:
+    type: string
+    description: Optional method-specific notes.
+
+notes:
+  - Failed, skipped, and missing rows should keep mutation_id, method, run_id, and status.
+  - Method-specific raw outputs should stay under the dataset results directory.

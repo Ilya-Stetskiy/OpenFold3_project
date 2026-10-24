@@ -1,0 +1,16 @@
+rosetta:
+  binary_path: /path/to/rosetta/ddg_monomer
+  working_mode: isolated_job_dir
+  protocol: ddg_monomer
+  score_function: ref2015
+  number_of_runs: 3
+  timeout_seconds: 1800
+  keep_raw_outputs: true
+  overwrite_existing: false
+  extra_args: []
+
+paths:
+  structure_root: data/structures/chain/current_internal
+  results_root: results/current_internal/rosetta
+  logs_root: logs/rosetta_runs
+

@@ -1,0 +1,508 @@
+version: 1
+
+defaults:
+  local_radius_angstrom: 5.0
+  supported_local_radii_angstrom:
+    - 5.0
+    - 8.0
+    - 10.0
+
+metric_groups:
+  scalar_ddg:
+    description: Scalar DDG and score comparisons against experimental DDG or paired method outputs.
+    active_for_current_internal: true
+    metrics:
+      - metric_name: ddg_regression
+        metric_group: scalar_ddg
+        metric_type: scalar_vs_experiment
+        description: Compare predicted DDG-like method scores against experimental DDG.
+        required_inputs:
+          - experimental_ddg
+          - predicted_score
+        optional_inputs:
+          - method
+          - structure_source
+        outputs:
+          - pearson
+          - spearman
+          - mae
+          - rmse
+          - bias
+          - sign_accuracy
+        applicable_entity: mutation
+        applicable_dataset_type: single_chain_ddg
+        requires_reference_structure: false
+        requires_predicted_structure: false
+        requires_mutation_site: false
+        requires_plddt: false
+        blocking_conditions:
+          - pending_method_result
+          - missing_experimental_ddg
+        notes: Aggregation happens after per-mutation parsed method outputs exist.
+      - metric_name: paired_score_comparison
+        metric_group: scalar_ddg
+        metric_type: scalar_pair
+        description: Compare paired method scores across representation sources, such as experimental versus OpenFold structure inputs.
+        required_inputs:
+          - score_a
+          - score_b
+        optional_inputs:
+          - method
+          - paired_structure_sources
+        outputs:
+          - pearson
+          - spearman
+          - median_abs_difference
+          - sign_agreement
+        applicable_entity: mutation
+        applicable_dataset_type: single_chain_ddg
+        requires_reference_structure: false
+        requires_predicted_structure: false
+        requires_mutation_site: false
+        requires_plddt: false
+        blocking_conditions:
+          - pending_paired_method_results
+        notes: Used for experimental-structure versus OpenFold-structure score consistency.
+
+  global_structure:
+    description: Global reference-versus-predicted structure comparison metrics for one protein chain.
+    active_for_current_internal: true
+    metrics:
+      - metric_name: ca_rmsd
+        metric_group: global_structure
+        metric_type: structure_pair_global
+        description: C-alpha RMSD after structural alignment.
+        required_inputs:
+          - reference_structure_path
+          - predicted_structure_path
+          - chain_id
+        optional_inputs:
+          - residue_mapping
+        outputs:
+          - ca_rmsd
+          - aligned_residue_count
+        applicable_entity: chain_sequence
+        applicable_dataset_type: single_chain_structure
+        requires_reference_structure: true
+        requires_predicted_structure: true
+        requires_mutation_site: false
+        requires_plddt: false
+        blocking_conditions:
+          - missing_reference_structure
+          - pending_openfold_structure
+        notes: Active task is created once per unique chain/sequence, not once per mutation.
+      - metric_name: backbone_rmsd
+        metric_group: global_structure
+        metric_type: structure_pair_global
+        description: Backbone atom RMSD after structural alignment.
+        required_inputs:
+          - reference_structure_path
+          - predicted_structure_path
+          - chain_id
+        optional_inputs:
+          - residue_mapping
+        outputs:
+          - backbone_rmsd
+          - aligned_residue_count
+        applicable_entity: chain_sequence
+        applicable_dataset_type: single_chain_structure
+        requires_reference_structure: true
+        requires_predicted_structure: true
+        requires_mutation_site: false
+        requires_plddt: false
+        blocking_conditions:
+          - missing_reference_structure
+          - pending_openfold_structure
+        notes: Backbone atom set is implementation-defined in the future metric runner.
+      - metric_name: all_atom_rmsd
+        metric_group: global_structure
+        metric_type: structure_pair_global
+        description: All-heavy-atom or all-atom RMSD after atom matching and alignment.
+        required_inputs:
+          - reference_structure_path
+          - predicted_structure_path
+          - chain_id
+        optional_inputs:
+          - atom_matching_policy
+        outputs:
+          - all_atom_rmsd
+          - matched_atom_count
+        applicable_entity: chain_sequence
+        applicable_dataset_type: single_chain_structure
+        requires_reference_structure: true
+        requires_predicted_structure: true
+        requires_mutation_site: false
+        requires_plddt: false
+        blocking_conditions:
+          - missing_reference_structure
+          - pending_openfold_structure
+        notes: Requires a conservative atom matching policy before implementation.
+      - metric_name: tm_score
+        metric_group: global_structure
+        metric_type: structure_pair_global
+        description: TM-score for global fold similarity.
+        required_inputs:
+          - reference_structure_path
+          - predicted_structure_path
+          - chain_id
+        optional_inputs:
+          - tm_score_backend
+        outputs:
+          - tm_score
+          - aligned_residue_count
+        applicable_entity: chain_sequence
+        applicable_dataset_type: single_chain_structure
+        requires_reference_structure: true
+        requires_predicted_structure: true
+        requires_mutation_site: false
+        requires_plddt: false
+        blocking_conditions:
+          - missing_reference_structure
+          - pending_openfold_structure
+        notes: Backend selection is deferred to the future metric implementation.
+      - metric_name: gdt_ts
+        metric_group: global_structure
+        metric_type: structure_pair_global
+        description: GDT_TS global structural similarity score.
+        required_inputs:
+          - reference_structure_path
+          - predicted_structure_path
+          - chain_id
+        optional_inputs:
+          - gdt_backend
+        outputs:
+          - gdt_ts
+          - aligned_residue_count
+        applicable_entity: chain_sequence
+        applicable_dataset_type: single_chain_structure
+        requires_reference_structure: true
+        requires_predicted_structure: true
+        requires_mutation_site: false
+        requires_plddt: false
+        blocking_conditions:
+          - missing_reference_structure
+          - pending_openfold_structure
+        notes: Active only as a future task definition until predicted structures exist.
+
+  local_mutation_structure:
+    description: Local structure comparisons centered on a mutation site.
+    active_for_current_internal: true
+    metrics:
+      - metric_name: local_ca_rmsd
+        metric_group: local_mutation_structure
+        metric_type: structure_pair_local
+        description: C-alpha RMSD in a local neighborhood around the mutation site.
+        required_inputs:
+          - reference_structure_path
+          - predicted_structure_path
+          - mutation_position
+          - local_radius_angstrom
+        optional_inputs:
+          - residue_mapping
+        outputs:
+          - local_ca_rmsd
+          - local_residue_count
+        applicable_entity: mutation_site
+        applicable_dataset_type: single_chain_structure
+        requires_reference_structure: true
+        requires_predicted_structure: true
+        requires_mutation_site: true
+        requires_plddt: false
+        blocking_conditions:
+          - missing_reference_structure
+          - pending_openfold_structure
+          - missing_mutation_site
+        notes: Default local radius is 5 Angstrom; registry lists 8 and 10 Angstrom as future options.
+      - metric_name: local_backbone_rmsd
+        metric_group: local_mutation_structure
+        metric_type: structure_pair_local
+        description: Backbone RMSD in a local neighborhood around the mutation site.
+        required_inputs:
+          - reference_structure_path
+          - predicted_structure_path
+          - mutation_position
+          - local_radius_angstrom
+        optional_inputs:
+          - residue_mapping
+        outputs:
+          - local_backbone_rmsd
+          - local_residue_count
+        applicable_entity: mutation_site
+        applicable_dataset_type: single_chain_structure
+        requires_reference_structure: true
+        requires_predicted_structure: true
+        requires_mutation_site: true
+        requires_plddt: false
+        blocking_conditions:
+          - missing_reference_structure
+          - pending_openfold_structure
+          - missing_mutation_site
+        notes: Does not compute anything at task-build time.
+      - metric_name: local_lddt
+        metric_group: local_mutation_structure
+        metric_type: structure_pair_local
+        description: Local lDDT-like score around the mutation site.
+        required_inputs:
+          - reference_structure_path
+          - predicted_structure_path
+          - mutation_position
+          - local_radius_angstrom
+        optional_inputs:
+          - residue_mapping
+        outputs:
+          - local_lddt
+          - local_residue_count
+        applicable_entity: mutation_site
+        applicable_dataset_type: single_chain_structure
+        requires_reference_structure: true
+        requires_predicted_structure: true
+        requires_mutation_site: true
+        requires_plddt: false
+        blocking_conditions:
+          - missing_reference_structure
+          - pending_openfold_structure
+          - missing_mutation_site
+        notes: Implementation should define whether ligand/contact atoms are ignored.
+      - metric_name: local_contact_precision
+        metric_group: local_mutation_structure
+        metric_type: structure_pair_local
+        description: Precision of local residue contacts around the mutation site.
+        required_inputs:
+          - reference_structure_path
+          - predicted_structure_path
+          - mutation_position
+          - local_radius_angstrom
+        optional_inputs:
+          - contact_cutoff_angstrom
+        outputs:
+          - local_contact_precision
+          - reference_contact_count
+          - predicted_contact_count
+        applicable_entity: mutation_site
+        applicable_dataset_type: single_chain_structure
+        requires_reference_structure: true
+        requires_predicted_structure: true
+        requires_mutation_site: true
+        requires_plddt: false
+        blocking_conditions:
+          - missing_reference_structure
+          - pending_openfold_structure
+          - missing_mutation_site
+        notes: This is single-chain local contact precision, not interface contact precision.
+
+  confidence_error:
+    description: OpenFold confidence summaries and future confidence-versus-error relationship tasks.
+    active_for_current_internal: true
+    metrics:
+      - metric_name: global_plddt
+        metric_group: confidence_error
+        metric_type: confidence_summary
+        description: Global pLDDT summary for an OpenFold WT prediction.
+        required_inputs:
+          - predicted_structure_path
+          - plddt_source
+        optional_inputs:
+          - confidence_json_path
+        outputs:
+          - global_plddt
+          - plddt_median
+          - plddt_std
+        applicable_entity: chain_sequence
+        applicable_dataset_type: single_chain_structure
+        requires_reference_structure: false
+        requires_predicted_structure: true
+        requires_mutation_site: false
+        requires_plddt: true
+        blocking_conditions:
+          - pending_openfold_structure
+          - pending_confidence_file
+        notes: Created once per unique OpenFold WT sequence.
+      - metric_name: mutation_site_plddt
+        metric_group: confidence_error
+        metric_type: confidence_summary
+        description: pLDDT at the residue corresponding to the mutation site.
+        required_inputs:
+          - predicted_structure_path
+          - mutation_position
+          - plddt_source
+        optional_inputs:
+          - confidence_json_path
+        outputs:
+          - mutation_site_plddt
+        applicable_entity: mutation_site
+        applicable_dataset_type: single_chain_structure
+        requires_reference_structure: false
+        requires_predicted_structure: true
+        requires_mutation_site: true
+        requires_plddt: true
+        blocking_conditions:
+          - pending_openfold_structure
+          - pending_confidence_file
+          - missing_mutation_site
+        notes: Created per mutation.
+      - metric_name: local_plddt
+        metric_group: confidence_error
+        metric_type: confidence_summary
+        description: Local pLDDT summary around the mutation site.
+        required_inputs:
+          - predicted_structure_path
+          - mutation_position
+          - local_radius_angstrom
+          - plddt_source
+        optional_inputs:
+          - confidence_json_path
+        outputs:
+          - local_plddt
+          - local_plddt_min
+          - local_plddt_std
+        applicable_entity: mutation_site
+        applicable_dataset_type: single_chain_structure
+        requires_reference_structure: false
+        requires_predicted_structure: true
+        requires_mutation_site: true
+        requires_plddt: true
+        blocking_conditions:
+          - pending_openfold_structure
+          - pending_confidence_file
+          - missing_mutation_site
+        notes: Default local radius is 5 Angstrom.
+      - metric_name: plddt_vs_global_error
+        metric_group: confidence_error
+        metric_type: confidence_vs_error
+        description: Relate global pLDDT summaries to global structural error metrics.
+        required_inputs:
+          - global_plddt
+          - global_structure_metric
+        optional_inputs:
+          - sequence_id
+        outputs:
+          - pearson
+          - spearman
+          - calibration_summary
+        applicable_entity: chain_sequence
+        applicable_dataset_type: single_chain_structure
+        requires_reference_structure: true
+        requires_predicted_structure: true
+        requires_mutation_site: false
+        requires_plddt: true
+        blocking_conditions:
+          - pending_upstream_metrics
+        notes: Requires pLDDT summaries and global structure metrics first.
+      - metric_name: plddt_vs_local_error
+        metric_group: confidence_error
+        metric_type: confidence_vs_error
+        description: Relate local pLDDT to local mutation-site structural errors.
+        required_inputs:
+          - local_plddt
+          - local_structure_metric
+        optional_inputs:
+          - mutation_record_id
+        outputs:
+          - pearson
+          - spearman
+          - calibration_summary
+        applicable_entity: mutation_site
+        applicable_dataset_type: single_chain_structure
+        requires_reference_structure: true
+        requires_predicted_structure: true
+        requires_mutation_site: true
+        requires_plddt: true
+        blocking_conditions:
+          - pending_upstream_metrics
+        notes: Requires local structure metrics and local pLDDT first.
+      - metric_name: plddt_vs_ddg_error
+        metric_group: confidence_error
+        metric_type: confidence_vs_error
+        description: Relate pLDDT summaries to DDG prediction error for method outputs.
+        required_inputs:
+          - plddt_summary
+          - ddg_error
+        optional_inputs:
+          - method
+          - structure_source
+        outputs:
+          - pearson
+          - spearman
+          - calibration_summary
+        applicable_entity: mutation_method_result
+        applicable_dataset_type: single_chain_ddg
+        requires_reference_structure: false
+        requires_predicted_structure: true
+        requires_mutation_site: true
+        requires_plddt: true
+        blocking_conditions:
+          - pending_upstream_metrics
+        notes: Requires parsed method outputs and confidence summaries first.
+
+  future_complex_interface:
+    description: Future extension for protein-complex/interface metrics. Not active for current_internal single-chain tasks.
+    active_for_current_internal: false
+    metrics:
+      - metric_name: dockq
+        metric_group: future_complex_interface
+        metric_type: structure_pair_interface
+        description: DockQ score for protein complex/interface model quality.
+        required_inputs:
+          - reference_complex_structure_path
+          - predicted_complex_structure_path
+          - receptor_chain_ids
+          - ligand_chain_ids
+        optional_inputs: []
+        outputs:
+          - dockq
+          - fnat
+          - lrmsd
+          - irmsd
+        applicable_entity: protein_complex
+        applicable_dataset_type: complex_interface
+        requires_reference_structure: true
+        requires_predicted_structure: true
+        requires_mutation_site: false
+        requires_plddt: false
+        blocking_conditions:
+          - dataset_not_complex_interface
+        notes: Future extension only; no active tasks for current_internal.
+      - metric_name: interface_rmsd
+        metric_group: future_complex_interface
+        metric_type: structure_pair_interface
+        description: Interface RMSD for complex predictions.
+        required_inputs:
+          - reference_complex_structure_path
+          - predicted_complex_structure_path
+          - interface_chain_ids
+        optional_inputs: []
+        outputs:
+          - interface_rmsd
+          - interface_residue_count
+        applicable_entity: protein_complex
+        applicable_dataset_type: complex_interface
+        requires_reference_structure: true
+        requires_predicted_structure: true
+        requires_mutation_site: false
+        requires_plddt: false
+        blocking_conditions:
+          - dataset_not_complex_interface
+        notes: Future extension only; no active tasks for current_internal.
+      - metric_name: interface_contact_precision
+        metric_group: future_complex_interface
+        metric_type: structure_pair_interface
+        description: Contact precision across a protein-protein interface.
+        required_inputs:
+          - reference_complex_structure_path
+          - predicted_complex_structure_path
+          - interface_chain_ids
+        optional_inputs:
+          - contact_cutoff_angstrom
+        outputs:
+          - interface_contact_precision
+          - reference_interface_contact_count
+          - predicted_interface_contact_count
+        applicable_entity: protein_complex
+        applicable_dataset_type: complex_interface
+        requires_reference_structure: true
+        requires_predicted_structure: true
+        requires_mutation_site: false
+        requires_plddt: false
+        blocking_conditions:
+          - dataset_not_complex_interface
+        notes: Future extension only; separate from single-chain local_contact_precision.

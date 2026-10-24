@@ -1,0 +1,14 @@
+esm2:
+  model_name: facebook/esm2_t33_650M_UR50D
+  python_bin: python3
+  device: cuda
+  scoring_mode: masked_marginal
+  max_sequence_length: null
+  timeout_seconds: 900
+  keep_raw_outputs: true
+  overwrite_existing: false
+
+paths:
+  sequence_root: data/sequences/current_internal
+  results_root: results/current_internal/esm2
+  logs_root: logs/esm2_runs

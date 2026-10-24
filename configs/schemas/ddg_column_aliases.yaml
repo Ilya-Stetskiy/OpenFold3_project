@@ -1,0 +1,74 @@
+version: 1
+
+columns:
+  protein_id:
+    aliases:
+      - protein_id
+      - protein
+      - protein_name
+      - target
+  pdb_id:
+    aliases:
+      - pdb_id
+      - pdb
+      - structure_id
+  chain_id:
+    aliases:
+      - chain_id
+      - chain
+      - pdb_chain
+  mutation:
+    aliases:
+      - mutation
+      - mutant
+      - variant
+      - aa_change
+  experimental_ddg:
+    aliases:
+      - experimental_ddg
+      - exp_ddg
+      - ddg_exp
+      - ddG
+      - experimental
+  method:
+    aliases:
+      - method
+      - backend
+      - predictor
+  structure_source:
+    aliases:
+      - structure_source
+      - source
+      - structure_type
+      - representation
+  status:
+    aliases:
+      - status
+      - run_status
+  predicted_score:
+    aliases:
+      - ddg
+      - predicted_ddg
+      - prediction
+      - score
+      - value
+  unit:
+    aliases:
+      - unit
+      - prediction_unit
+      - ddg_unit
+  error:
+    aliases:
+      - error
+      - error_message
+      - failure_reason
+  raw_output:
+    aliases:
+      - raw_output
+      - output
+      - raw_result
+  output_path:
+    aliases:
+      - output_path
+      - result_path
+      - artifact_path

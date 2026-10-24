@@ -1,0 +1,16 @@
+defaults:
+  workers: 4
+  retries: 3
+  timeout_seconds: 60
+  force: false
+  resume: true
+  use_part_files: true
+  log_dir: logs/data_fetching
+  manifest_csv: data/manifests/source_manifest.csv
+  manifest_json: data/manifests/source_manifest.json
+
+background:
+  recommended: tmux
+  tmux_session_name: ddg_fetch
+  latest_log: logs/data_fetching/fetch_latest.log
+  nohup_log: logs/data_fetching/fetch_nohup.log

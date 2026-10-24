@@ -1,0 +1,45 @@
+version: 1
+
+defaults:
+  reserve_cpu_cores: 1
+  max_total_workers: auto
+  min_free_ram_gb: 8
+  min_free_disk_gb: 20
+  load_average_limit_per_core: 0.85
+  allow_parallel_tools: true
+
+cpu_heavy:
+  description: "Adaptive resource profile for CPU-heavy DDG executors."
+  tools:
+    foldx_experimental:
+      enabled: true
+      stage_name: foldx_experimental
+      script_path: scripts/executors/run_foldx_experimental.py
+      cpu_per_job: 1
+      ram_gb_per_job: 1
+      min_workers: 1
+      max_workers: 8
+      priority: 20
+      notes: "FoldX is usually lighter; allow more concurrent jobs."
+
+    rosetta_experimental:
+      enabled: true
+      stage_name: rosetta_experimental
+      script_path: scripts/executors/run_rosetta_experimental.py
+      cpu_per_job: 2
+      ram_gb_per_job: 4
+      min_workers: 1
+      max_workers: 4
+      priority: 10
+      notes: "Rosetta is usually heavier; keep the default concurrency conservative."
+
+    esm2_cpu_optional:
+      enabled: false
+      stage_name: esm2_cpu_optional
+      script_path: ""
+      cpu_per_job: 2
+      ram_gb_per_job: 6
+      min_workers: 0
+      max_workers: 2
+      priority: 30
+      notes: "Disabled by default because ESM2 is currently handled by gpu_heavy."

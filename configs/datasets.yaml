@@ -1,0 +1,140 @@
+version: 1
+
+schemas:
+  mutations: configs/schemas/ddg_mutations_v1.yaml
+  results: configs/schemas/ddg_results_v1.yaml
+
+manifest_dir: data/manifests
+
+datasets:
+  current_internal:
+    role: pilot_internal_dataset
+    description: >-
+      Existing local dataset with experimental DDG values and already computed
+      FoldX, Rosetta, ESM2, and OpenFold results. Use it for pilot analysis,
+      pipeline checks, and internal reporting only. It is not an independent
+      benchmark.
+    raw_dir: data/raw/current_internal
+    interim_dir: data/interim/current_internal
+    processed_dir: data/processed/current_internal
+    results_dir: results/current_internal
+    reports_dir: reports/current_internal
+    allowed_for_tuning: true
+    allowed_for_final_benchmark: false
+    sources:
+      - name: local_results_csv
+        source_type: local_results
+        download:
+          mode: local_file
+          urls: []
+          expected_path: data/raw/current_internal/results.csv
+          expected_filename_patterns: []
+          required: true
+          allow_parallel: false
+          checksum: null
+          notes: >-
+            Local pilot file with experimental DDG and already computed method
+            results. The fetch manager only registers this file; it does not
+            download current_internal from the internet.
+
+  big_curated:
+    role: expansion_robustness_analysis
+    description: >-
+      Future large curated dataset assembled from ThermoMutDB and ProThermDB.
+      Use it for pipeline expansion, debugging, and robustness analysis before
+      final external evaluation.
+    raw_dir: data/raw/big_curated
+    interim_dir: data/interim/big_curated
+    processed_dir: data/processed/big_curated
+    results_dir: results/big_curated
+    reports_dir: reports/big_curated
+    allowed_for_tuning: true
+    allowed_for_final_benchmark: false
+    sources:
+      - name: thermomutdb
+        source_type: database_export
+        raw_dir: data/raw/big_curated/thermomutdb
+        download:
+          mode: remote_or_manual
+          urls: []
+          expected_path: null
+          expected_filename_patterns:
+            - "*.json"
+            - "*.csv"
+            - "*.tsv"
+            - "*.zip"
+            - "*.tar.gz"
+          required: true
+          allow_parallel: true
+          checksum: null
+          notes: >-
+            Use direct URLs when they become available; otherwise place a manual
+            ThermoMutDB export in this raw source directory.
+      - name: prothermdb
+        source_type: database_export
+        raw_dir: data/raw/big_curated/prothermdb
+        download:
+          mode: manual_download
+          urls: []
+          expected_path: null
+          expected_filename_patterns:
+            - "*.csv"
+            - "*.tsv"
+            - "*.xlsx"
+          required: false
+          allow_parallel: false
+          checksum: null
+          notes: >-
+            Manual source. Put exported ProThermDB files in the source raw
+            directory and record provenance in the source manifest.
+
+  independent_benchmark:
+    role: final_external_validation
+    description: >-
+      Future independent benchmark from S669 and/or S461. Keep it isolated from
+      tuning and debugging so it remains a valid final external validation set.
+    raw_dir: data/raw/independent_benchmark
+    interim_dir: data/interim/independent_benchmark
+    processed_dir: data/processed/independent_benchmark
+    results_dir: results/independent_benchmark
+    reports_dir: reports/independent_benchmark
+    allowed_for_tuning: false
+    allowed_for_final_benchmark: true
+    sources:
+      - name: s669
+        source_type: benchmark
+        raw_dir: data/raw/independent_benchmark/s669
+        download:
+          mode: remote_or_manual
+          urls: []
+          expected_path: null
+          expected_filename_patterns:
+            - "*.tsv"
+            - "*.csv"
+            - "*.fasta"
+            - "*.zip"
+            - "*.tar.gz"
+          required: true
+          allow_parallel: true
+          checksum: null
+          notes: >-
+            Independent benchmark source. Use direct URLs when available, or
+            place files manually. Do not use this source for tuning or debugging
+            claims.
+      - name: s461
+        source_type: benchmark
+        raw_dir: data/raw/independent_benchmark/s461
+        download:
+          mode: manual_download
+          urls: []
+          expected_path: null
+          expected_filename_patterns:
+            - "*.tsv"
+            - "*.csv"
+            - "*.xlsx"
+          required: false
+          allow_parallel: false
+          checksum: null
+          notes: >-
+            Optional manual benchmark source. Keep it separated from
+            big_curated and never use it for pipeline tuning.

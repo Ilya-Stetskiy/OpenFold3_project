@@ -1,0 +1,66 @@
+version: 1
+
+job_statuses:
+  - pending
+  - blocked
+  - skipped
+  - running
+  - success
+  - failed
+  - parse_failed
+  - timeout
+  - cancelled
+
+stage_statuses:
+  - not_started
+  - running
+  - completed
+  - completed_with_failures
+  - failed
+  - cancelled
+
+terminal_job_statuses:
+  - success
+  - failed
+  - skipped
+  - blocked
+  - parse_failed
+  - timeout
+  - cancelled
+
+required_job_manifest_fields:
+  - dataset_name
+  - stage_group
+  - stage_name
+  - job_id
+  - mutation_record_id
+  - method
+  - structure_source
+  - input_ready
+  - job_status
+  - started_at
+  - finished_at
+  - runtime_seconds
+  - input_files
+  - output_files
+  - parsed_result_path
+  - error_message
+  - notes
+
+standard_output_layout:
+  "results/{dataset}/{method}/{structure_source}/{mutation_record_id}/":
+    - command.txt
+    - stdout.log
+    - stderr.log
+    - raw/
+    - parsed_result.json
+    - job_manifest.json
+
+stage_manifests:
+  csv: "results/{dataset}/_manifests/{stage_name}_jobs.csv"
+  json: "results/{dataset}/_manifests/{stage_name}_jobs.json"
+
+completion_markers:
+  completed: "data/run_state/{dataset}/{stage_group}.completed.json"
+  dry_run_plan: "data/run_state/{dataset}/{stage_group}.dry_run_plan.json"
+

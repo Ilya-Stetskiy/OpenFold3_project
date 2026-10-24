@@ -1,0 +1,469 @@
+version: 1
+
+completion_markers:
+  root: data/run_state
+  pattern: "{dataset_name}/{stage_group}.completed.json"
+  schema:
+    - dataset_name
+    - stage_group
+    - status
+    - started_at
+    - completed_at
+    - host
+    - command
+    - outputs
+    - summary
+    - notes
+
+stage_groups:
+  preprepare:
+    description: "Local/server preparation before heavy execution"
+    order: 1
+    can_run_parallel: false
+    waits_for: []
+    unlocks:
+      - cpu_heavy
+      - gpu_heavy
+    requires_gpu: false
+
+  cpu_heavy:
+    description: "CPU-heavy execution that can run in parallel with GPU-heavy jobs"
+    order: 2
+    can_run_parallel: true
+    parallel_with:
+      - gpu_heavy
+    waits_for:
+      - preprepare
+    requires_gpu: false
+
+  gpu_heavy:
+    description: "GPU-heavy execution that can run in parallel with CPU-heavy jobs"
+    order: 2
+    can_run_parallel: true
+    parallel_with:
+      - cpu_heavy
+    waits_for:
+      - preprepare
+    requires_gpu: true
+
+  post_gpu_cpu_heavy:
+    description: "CPU-heavy execution that depends on completed GPU outputs"
+    order: 3
+    can_run_parallel: false
+    waits_for:
+      - cpu_heavy
+      - gpu_heavy
+    unlocks:
+      - analysis_reporting
+    requires_gpu: false
+
+  analysis_reporting:
+    description: "Read-only statistics, metrics summaries, plots, and final reporting"
+    order: 4
+    can_run_parallel: false
+    waits_for:
+      - post_gpu_cpu_heavy
+    requires_gpu: false
+
+  postprocess:
+    description: "Deprecated alias for analysis_reporting; kept for backward compatibility"
+    order: 4
+    can_run_parallel: false
+    waits_for:
+      - post_gpu_cpu_heavy
+    requires_gpu: false
+
+stages:
+  - stage_name: validate_dataset_registry
+    stage_group: preprepare
+    status: implemented
+    script_path: scripts/data/validate_dataset_config.py
+    requires_gpu: false
+    can_run_server: true
+    can_run_local: true
+    input_files:
+      - configs/datasets.yaml
+    output_files: []
+    depends_on: []
+    notes: Validate dataset registry shape and relative path discipline.
+  - stage_name: validate_current_internal_inputs
+    stage_group: preprepare
+    status: implemented
+    script_path: scripts/data/normalize_current_internal.py
+    requires_gpu: false
+    can_run_server: true
+    can_run_local: true
+    input_files:
+      - data/raw/current_internal/results.csv
+      - data/processed/current_internal/current_internal_mutations.csv
+    output_files:
+      - reports/current_internal/current_internal_normalization_qc.md
+    depends_on:
+      - validate_dataset_registry
+    notes: Existing normalized outputs are checked; rerun normalization only intentionally.
+  - stage_name: validate_resolved_jobs
+    stage_group: preprepare
+    status: implemented
+    script_path: scripts/data/apply_current_internal_structure_overrides.py
+    requires_gpu: false
+    can_run_server: true
+    can_run_local: true
+    input_files:
+      - data/processed/current_internal/current_internal_recalc_jobs_resolved.csv
+    output_files: []
+    depends_on:
+      - validate_current_internal_inputs
+    notes: Check resolved jobs are present for execution planning.
+  - stage_name: validate_structure_manifests
+    stage_group: preprepare
+    status: implemented
+    script_path: scripts/data/prepare_current_internal_inputs.py
+    requires_gpu: false
+    can_run_server: true
+    can_run_local: true
+    input_files:
+      - data/manifests/current_internal_structure_manifest_resolved.csv
+      - data/manifests/current_internal_sequence_manifest.csv
+      - data/manifests/current_internal_residue_mapping.csv
+    output_files: []
+    depends_on:
+      - validate_resolved_jobs
+    notes: Check prepared structure/sequence manifests; no heavy tools run.
+  - stage_name: build_evaluation_tasks
+    stage_group: preprepare
+    status: implemented
+    script_path: scripts/evaluation/build_evaluation_tasks.py
+    requires_gpu: false
+    can_run_server: true
+    can_run_local: true
+    input_files:
+      - configs/evaluation_metrics.yaml
+      - data/processed/current_internal/current_internal_recalc_jobs_resolved.csv
+    output_files:
+      - data/processed/current_internal/current_internal_evaluation_tasks.csv
+      - reports/current_internal/current_internal_evaluation_tasks_qc.md
+    depends_on:
+      - validate_structure_manifests
+    notes: Builds future evaluation tasks; does not compute metrics.
+  - stage_name: build_server_bundles
+    stage_group: preprepare
+    status: implemented
+    script_path: scripts/run/build_run_bundle.py
+    requires_gpu: false
+    can_run_server: false
+    can_run_local: true
+    input_files:
+      - configs/run_stages.yaml
+    output_files:
+      - bundles/
+    depends_on:
+      - build_evaluation_tasks
+    notes: Creates portable run bundles for server transfer.
+  - stage_name: check_server_environment
+    stage_group: preprepare
+    status: implemented
+    script_path: scripts/run/check_server_environment.py
+    requires_gpu: false
+    can_run_server: true
+    can_run_local: true
+    input_files:
+      - configs/run_stages.yaml
+      - configs/datasets.yaml
+    output_files:
+      - reports/server_environment/preprepare_environment_check.md
+      - reports/server_environment/preprepare_environment_check.json
+    depends_on:
+      - validate_dataset_registry
+    notes: Reports server/local environment readiness.
+
+  - stage_name: adaptive_cpu_heavy_scheduler
+    stage_group: cpu_heavy
+    status: implemented
+    script_path: scripts/run/run_cpu_heavy_adaptive.py
+    requires_gpu: false
+    can_run_server: true
+    can_run_local: true
+    input_files:
+      - configs/resource_profiles.yaml
+      - data/processed/current_internal/current_internal_recalc_jobs_resolved.csv
+    output_files:
+      - reports/current_internal/cpu_heavy_adaptive_plan.md
+      - reports/current_internal/cpu_heavy_adaptive_plan.json
+    depends_on:
+      - check_server_environment
+    notes: Computes adaptive CPU/RAM/load-aware worker counts for CPU-heavy executors; real execution still requires explicit --run.
+  - stage_name: foldx_experimental
+    stage_group: cpu_heavy
+    status: implemented
+    script_path: scripts/executors/run_foldx_experimental.py
+    requires_gpu: false
+    can_run_server: true
+    can_run_local: false
+    input_files:
+      - data/processed/current_internal/current_internal_recalc_jobs_resolved.csv
+      - data/structures/chain/current_internal/
+    output_files:
+      - results/current_internal/foldx/experimental/
+    depends_on:
+      - adaptive_cpu_heavy_scheduler
+    notes: FoldX experimental executor supports dry-run, preflight, materialized plans, smoke-run, and explicit real run.
+  - stage_name: rosetta_experimental
+    stage_group: cpu_heavy
+    status: implemented
+    script_path: scripts/executors/run_rosetta_experimental.py
+    requires_gpu: false
+    can_run_server: true
+    can_run_local: false
+    input_files:
+      - data/processed/current_internal/current_internal_recalc_jobs_resolved.csv
+      - data/structures/chain/current_internal/
+    output_files:
+      - results/current_internal/rosetta/experimental/
+    depends_on:
+      - adaptive_cpu_heavy_scheduler
+    notes: Rosetta experimental executor supports dry-run, preflight, materialized plans, smoke-run, and explicit real run.
+  - stage_name: esm2_cpu_optional
+    stage_group: cpu_heavy
+    status: planned
+    script_path: ""
+    requires_gpu: false
+    can_run_server: true
+    can_run_local: false
+    input_files:
+      - data/sequences/current_internal/current_internal_esm2_inputs.fasta
+    output_files:
+      - results/current_internal/esm2/sequence_only/
+    depends_on:
+      - check_server_environment
+    notes: Optional CPU ESM2 path if GPU is not used.
+  - stage_name: parse_cpu_outputs
+    stage_group: cpu_heavy
+    status: planned
+    script_path: ""
+    requires_gpu: false
+    can_run_server: true
+    can_run_local: true
+    input_files:
+      - results/current_internal/foldx/experimental/
+      - results/current_internal/rosetta/experimental/
+    output_files:
+      - results/current_internal/foldx/experimental/*/parsed_result.json
+      - results/current_internal/rosetta/experimental/*/parsed_result.json
+    depends_on:
+      - foldx_experimental
+      - rosetta_experimental
+    notes: Parse CPU-heavy method outputs after executors exist.
+
+  - stage_name: prepare_openfold_inputs
+    stage_group: gpu_heavy
+    status: implemented
+    script_path: scripts/data/prepare_current_internal_inputs.py
+    requires_gpu: false
+    can_run_server: true
+    can_run_local: true
+    input_files:
+      - data/sequences/current_internal/current_internal_openfold_inputs.fasta
+    output_files: []
+    depends_on:
+      - check_server_environment
+    notes: Validate existing OpenFold FASTA inputs; no OpenFold run.
+  - stage_name: openfold_wt_generation
+    stage_group: gpu_heavy
+    status: implemented
+    script_path: scripts/executors/run_openfold_wt.py
+    requires_gpu: true
+    can_run_server: true
+    can_run_local: false
+    input_files:
+      - data/sequences/current_internal/current_internal_openfold_inputs.fasta
+    output_files:
+      - results/current_internal/openfold/wt/
+    depends_on:
+      - prepare_openfold_inputs
+    notes: OpenFold WT executor with dry-run, preflight, materialized batch plans, explicit smoke-run/full-run modes, output normalization, and per-sequence job manifests.
+  - stage_name: collect_openfold_outputs
+    stage_group: post_gpu_cpu_heavy
+    status: implemented
+    script_path: scripts/executors/collect_openfold_outputs.py
+    requires_gpu: false
+    can_run_server: true
+    can_run_local: true
+    input_files:
+      - results/current_internal/openfold/wt/
+      - data/processed/current_internal/current_internal_recalc_jobs_resolved.csv
+      - data/manifests/current_internal_sequence_manifest.csv
+    output_files:
+      - data/manifests/current_internal_openfold_wt_manifest.csv
+      - data/manifests/current_internal_openfold_wt_errors.csv
+      - data/processed/current_internal/current_internal_recalc_jobs_openfold_ready.csv
+    depends_on:
+      - openfold_wt_generation
+    notes: Collect normalized OpenFold WT outputs, extract pLDDT summary, and derive OpenFold-ready FoldX/Rosetta jobs without changing source-of-truth jobs.
+  - stage_name: esm2_gpu_optional
+    stage_group: gpu_heavy
+    status: implemented
+    script_path: scripts/executors/run_esm2_gpu.py
+    requires_gpu: true
+    can_run_server: true
+    can_run_local: false
+    input_files:
+      - data/sequences/current_internal/current_internal_esm2_inputs.fasta
+    output_files:
+      - results/current_internal/esm2/sequence_only/
+    depends_on:
+      - prepare_openfold_inputs
+    notes: Optional GPU ESM2 scoring path with dry-run, preflight, materialized-plan, smoke-run, and explicit run modes.
+  - stage_name: parse_gpu_outputs
+    stage_group: gpu_heavy
+    status: planned
+    script_path: ""
+    requires_gpu: false
+    can_run_server: true
+    can_run_local: true
+    input_files:
+      - results/current_internal/esm2/sequence_only/
+    output_files:
+      - results/current_internal/esm2/sequence_only/*/parsed_result.json
+    depends_on:
+      - esm2_gpu_optional
+    notes: Parse GPU-heavy ESM2 outputs after executor output exists.
+
+  - stage_name: update_openfold_readiness
+    stage_group: post_gpu_cpu_heavy
+    status: implemented
+    script_path: scripts/executors/collect_openfold_outputs.py
+    requires_gpu: false
+    can_run_server: true
+    can_run_local: true
+    input_files:
+      - results/current_internal/openfold/wt/
+      - data/processed/current_internal/current_internal_recalc_jobs_resolved.csv
+    output_files:
+      - data/processed/current_internal/current_internal_recalc_jobs_openfold_ready.csv
+    depends_on:
+      - collect_openfold_outputs
+    notes: Implemented inside collect_openfold_outputs.py; writes a derived post-OpenFold readiness table only.
+  - stage_name: foldx_openfold
+    stage_group: post_gpu_cpu_heavy
+    status: implemented
+    script_path: scripts/executors/run_foldx_experimental.py
+    requires_gpu: false
+    can_run_server: true
+    can_run_local: false
+    input_files:
+      - data/processed/current_internal/current_internal_recalc_jobs_openfold_ready.csv
+      - results/current_internal/openfold/wt/
+    output_files:
+      - results/current_internal/foldx/openfold/
+    depends_on:
+      - update_openfold_readiness
+    notes: Reuses the generic FoldX runner with --structure-source openfold after OpenFold structures are collected and converted/prepared for FoldX.
+  - stage_name: rosetta_openfold
+    stage_group: post_gpu_cpu_heavy
+    status: planned
+    script_path: ""
+    requires_gpu: false
+    can_run_server: true
+    can_run_local: false
+    input_files:
+      - data/processed/current_internal/current_internal_recalc_jobs_openfold_ready.csv
+      - results/current_internal/openfold/wt/
+    output_files:
+      - results/current_internal/rosetta/openfold/
+    depends_on:
+      - update_openfold_readiness
+    notes: CPU execution after GPU-generated OpenFold structures are available.
+  - stage_name: parse_post_gpu_cpu_outputs
+    stage_group: post_gpu_cpu_heavy
+    status: planned
+    script_path: ""
+    requires_gpu: false
+    can_run_server: true
+    can_run_local: true
+    input_files:
+      - results/current_internal/foldx/openfold/
+      - results/current_internal/rosetta/openfold/
+    output_files:
+      - results/current_internal/foldx/openfold/*/parsed_result.json
+      - results/current_internal/rosetta/openfold/*/parsed_result.json
+    depends_on:
+      - foldx_openfold
+      - rosetta_openfold
+    notes: Parse post-GPU CPU outputs.
+  - stage_name: run_ddg_evaluation
+    stage_group: analysis_reporting
+    status: planned
+    script_path: ""
+    requires_gpu: false
+    can_run_server: true
+    can_run_local: true
+    input_files:
+      - data/processed/current_internal/current_internal_evaluation_tasks.csv
+      - results/current_internal/*/*/*/parsed_result.json
+    output_files:
+      - results/evaluation/current_internal/scalar_ddg/
+    depends_on:
+      - parse_cpu_outputs
+      - parse_post_gpu_cpu_outputs
+    notes: Planned DDG metric execution.
+  - stage_name: run_global_structure_metrics
+    stage_group: analysis_reporting
+    status: planned
+    script_path: ""
+    requires_gpu: false
+    can_run_server: true
+    can_run_local: true
+    input_files:
+      - data/processed/current_internal/current_internal_evaluation_tasks.csv
+      - results/current_internal/openfold/wt/
+    output_files:
+      - results/evaluation/current_internal/global_structure/
+    depends_on:
+      - collect_openfold_outputs
+    notes: Planned RMSD/TM-score/GDT_TS execution.
+  - stage_name: run_local_mutation_structure_metrics
+    stage_group: analysis_reporting
+    status: planned
+    script_path: ""
+    requires_gpu: false
+    can_run_server: true
+    can_run_local: true
+    input_files:
+      - data/processed/current_internal/current_internal_evaluation_tasks.csv
+      - results/current_internal/openfold/wt/
+    output_files:
+      - results/evaluation/current_internal/local_mutation_structure/
+    depends_on:
+      - collect_openfold_outputs
+    notes: Planned local RMSD/lDDT/contact precision execution.
+  - stage_name: run_confidence_error_metrics
+    stage_group: analysis_reporting
+    status: planned
+    script_path: ""
+    requires_gpu: false
+    can_run_server: true
+    can_run_local: true
+    input_files:
+      - data/processed/current_internal/current_internal_evaluation_tasks.csv
+      - results/evaluation/current_internal/
+    output_files:
+      - results/evaluation/current_internal/confidence_error/
+    depends_on:
+      - run_ddg_evaluation
+      - run_global_structure_metrics
+      - run_local_mutation_structure_metrics
+    notes: Planned pLDDT-vs-error analysis.
+  - stage_name: build_final_reports
+    stage_group: analysis_reporting
+    status: planned
+    script_path: ""
+    requires_gpu: false
+    can_run_server: true
+    can_run_local: true
+    input_files:
+      - results/evaluation/current_internal/
+    output_files:
+      - reports/current_internal/final/
+    depends_on:
+      - run_confidence_error_metrics
+    notes: Planned final report generation. This stage reads completed outputs only and does not run FoldX/Rosetta/OpenFold/ESM2.
